@@ -1287,13 +1287,25 @@ def get_progress_bar(percent, length=10):
     filled = int(length * percent / 100)
     return "🟩" * filled + "⬜" * (length - filled)
 
-def number_to_emoji(num):
+def number_to_emoji(num: int):
     """Chuyển số thành emoji số"""
     emoji_map = {
         '0': '0️⃣', '1': '1️⃣', '2': '2️⃣', '3': '3️⃣', '4': '4️⃣',
         '5': '5️⃣', '6': '6️⃣', '7': '7️⃣', '8': '8️⃣', '9': '9️⃣'
     }
     return ''.join(emoji_map[d] for d in str(num))
+
+def is_karaoke(title: str) -> bool:
+    """Heuristic to detect karaoke/backing-track videos by title"""
+    if not title:
+        return False
+    title_lower = title.lower()
+    keywords = [
+        "karaoke", "instrumental", "beat", "lyrics",
+        "sing along", "official karaoke", "backing track",
+        "minus one", "nhạc nền", "không lời"
+    ]
+    return any(kw in title_lower for kw in keywords)
 
 async def check_access(interaction: discord.Interaction, deferred: bool = False):
     db = load_db()
