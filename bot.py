@@ -2,7 +2,7 @@
 import discord
 from discord import app_commands, Embed, Color
 from discord.ext import commands, tasks
-import os, json, random, asyncio, pytz, sys, aiohttp, time
+import os, json, random, asyncio, pytz, sys, aiohttp, time, io, mimetypes
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from colorama import init, Fore, Style
@@ -1691,17 +1691,43 @@ async def ytsearch(interaction: discord.Interaction, query: str):
 
     bot.search_results[interaction.guild_id] = results
 
-    embed = Embed(title=f"🔍 Kết quả tìm kiếm: {query}", color=Color.blue())
-    for i, r in enumerate(results, 1):
-        duration = format_duration(r.get("duration"))
-        thumb = r.get("thumbnail") or "https://i.imgur.com/7ZQZ8ZQ.png"
-        embed.add_field(
-            name=f"{i}. {r['title'][:80]}{'...' if len(r['title']) > 80 else ''}",
-            value=f"👥 {r['channel']} | ⏱️ {duration}\n🖼️ [Thumbnail]({thumb})",
-            inline=False
-        )
-    embed.set_footer(text="Gợi ý đã được lưu. Dùng /ytplay để tải video!")
-    await interaction.followup.send(embed=embed)
+    files: list[discord.File] = []
+    embeds: list[Embed] = []
+    default_thumb = "https://i.imgur.com/7ZQZ8ZQ.png"
+    async with aiohttp.ClientSession() as session:
+        for idx, r in enumerate(results, 1):
+            duration = format_duration(r.get("duration"))
+            thumb_url = r.get("thumbnail") or default_thumb
+            file_name = f"thumb_{idx}.jpg"
+            attachment_ref: discord.File | None = None
+            if thumb_url.startswith("http"):
+                try:
+                    async with session.get(thumb_url) as resp:
+                        if resp.status == 200:
+                            data = await resp.read()
+                            mime = resp.headers.get("Content-Type", "image/jpeg")
+                            ext = mimetypes.guess_extension(mime.split(";")[0].strip()) or ".jpg"
+                            file_name = f"thumb_{idx}{ext}"
+                            attachment_ref = discord.File(io.BytesIO(data), filename=file_name)
+                            files.append(attachment_ref)
+                except Exception as e:
+                    rainbow_log(f"⚠️ Không tải được thumbnail {thumb_url}: {e}")
+            embed = Embed(
+                title=f"{idx}. {r['title']}",
+                description=f"👥 {r['channel']} • ⏱️ {duration}\n🔗 {r['url']}",
+                color=Color.blue()
+            )
+            if attachment_ref:
+                embed.set_image(url=f"attachment://{file_name}")
+            else:
+                embed.set_image(url=thumb_url)
+            embeds.append(embed)
+
+    await interaction.followup.send(
+        content=f"🔍 **{len(results)} kết quả cho** `{query}`",
+        embeds=embeds[:10],
+        files=files or None
+    )
 
 
 def _autocomplete_choices(results: list[dict], current: str) -> list[app_commands.Choice[str]]:
