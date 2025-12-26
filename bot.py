@@ -23,7 +23,7 @@ FFMPEG_OPTIONS = {
 }
 
 # --- PHIÊN BẢN ---
-VERSION = "v7.6.0 - Thời Không Luân Chuyển"
+VERSION = "v8.0.0 - Âm Nhạc Thiên Đạo"
 
 # --- NGHỆ THUẬT CHỮ ASCII ---
 ASCII_TXA = rf"""
@@ -237,7 +237,13 @@ async def handle_track_end(guild_id: int, path: str, error: Exception | None = N
     if error:
         rainbow_log(f"❌ Lỗi khi phát nhạc: {error}")
     bot.current_tracks.pop(guild_id, None)
+    bot.paused.discard(guild_id)
     await cleanup_track_file(path)
+    if guild_id in bot.skip_autoplay:
+        bot.skip_autoplay.discard(guild_id)
+        return
+    # Phát tiếp theo
+    await play_next(guild_id)
 
 
 def voice_after_callback(guild_id: int, path: str):
@@ -250,20 +256,27 @@ def voice_after_callback(guild_id: int, path: str):
     return _after
 
 
-async def stop_current_track(guild_id: int, detach: bool = False):
+async def stop_current_track(guild_id: int, detach: bool = False, skip_autoplay: bool = False):
     voice_client = bot.voice_states.get(guild_id)
-    current_path = bot.current_tracks.pop(guild_id, None)
+
+    if skip_autoplay:
+        bot.skip_autoplay.add(guild_id)
 
     if voice_client and voice_client.is_playing():
         voice_client.stop()
-
-    if current_path:
-        await cleanup_track_file(current_path)
+    else:
+        path = bot.current_tracks.pop(guild_id, None)
+        if path:
+            await cleanup_track_file(path)
+        bot.current_meta.pop(guild_id, None)
+        bot.paused.discard(guild_id)
 
     if detach and voice_client:
-        await voice_client.disconnect(force=True)
+        if voice_client.is_connected():
+            await voice_client.disconnect(force=True)
         bot.voice_states.pop(guild_id, None)
         rainbow_log(f"👋 Bot đã rời khỏi voice channel của guild {guild_id}", is_italic=True)
+        bot.queues[guild_id] = []
 
 
 async def respond_ephemeral(interaction: discord.Interaction, content: str, embed: Embed | None = None):
@@ -321,6 +334,141 @@ def save_db(data):
 
 # --- EMOJI CACHE SYSTEM ---
 EMOJI_CACHE_FILE = "cache/emoji_cache.json"
+
+# --- MUSIC QUEUE HELPERS ---
+def format_queue(queue: list[dict]) -> str:
+    lines = []
+    for i, item in enumerate(queue, 1):
+        title = item.get('title') or 'Chưa biết tên'
+        duration = format_duration(item.get('duration'))
+        requester = f"<@{item['requester_id']}>" if item.get('requester_id') else "Ẩn danh"
+        lines.append(f"{i}. **{title}** ({duration}) • {requester}")
+    return "\n".join(lines) if lines else "Hàng chờ trống."
+
+
+def get_guild_queue(guild_id: int) -> list[dict]:
+    return bot.queues.setdefault(guild_id, [])
+
+async def download_track_async(url: str, mode: str) -> tuple[str, str, int | None]:
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, lambda: download_youtube_media(url, mode))
+
+
+async def fetch_video_info(url: str) -> dict | None:
+    def _info():
+        ydl_opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "skip_download": True,
+            "noplaylist": True,
+        }
+        with YoutubeDL(ydl_opts) as ydl:
+            return ydl.extract_info(url, download=False)
+
+    try:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, _info)
+    except Exception as e:
+        rainbow_log(f"⚠️ Không lấy được metadata video: {e}")
+        return None
+
+
+async def enqueue_track(guild_id: int, url: str, mode: str, requester_id: int | None, channel_id: int | None):
+    info = await fetch_video_info(url)
+    queue = get_guild_queue(guild_id)
+    entry = {
+        "url": url,
+        "mode": mode,
+        "title": info.get("title") if info else None,
+        "duration": info.get("duration") if info else None,
+        "requester_id": requester_id,
+        "channel_id": channel_id
+    }
+    queue.append(entry)
+    return entry, len(queue)
+
+
+def build_music_embed(title: str, duration: int | None, mode: str, voice_channel: discord.VoiceChannel,
+                      requester_id: int | None = None, url: str | None = None, queue_length: int | None = None,
+                      status: str = "🎵 Đang phát") -> Embed:
+    description = f"**{title}**"
+    if url:
+        description += f"\n🔗 [Mở trên YouTube]({url})"
+
+    embed = Embed(title=status, description=description, color=Color.purple())
+    embed.add_field(name="⏱️ Thời lượng", value=format_duration(duration), inline=True)
+    embed.add_field(name="📂 Chế độ", value=mode.upper(), inline=True)
+    embed.add_field(name="🎧 Voice Channel", value=voice_channel.mention, inline=True)
+    if requester_id:
+        embed.add_field(name="🧙 Yêu cầu", value=f"<@{requester_id}>", inline=False)
+    if queue_length is not None:
+        embed.add_field(name="📜 Hàng chờ", value=f"{queue_length} bài", inline=False)
+    embed.set_footer(text="Đang phát trực tiếp qua FFMPEG")
+    return embed
+
+
+async def notify_channel(guild_id: int, channel_id: int | None, embed: Embed):
+    channel = bot.get_channel(channel_id) if channel_id else None
+    if channel is None:
+        guild = bot.get_guild(guild_id)
+        if guild:
+            channel = guild.system_channel
+    if channel:
+        try:
+            await channel.send(embed=embed)
+        except Exception as e:
+            rainbow_log(f"⚠️ Không thể gửi thông báo nhạc: {e}")
+
+
+async def play_next(guild_id: int):
+    """Phát bài tiếp theo trong hàng chờ nếu có."""
+    queue = bot.queues.get(guild_id, [])
+    if not queue:
+        return
+
+    voice_client = bot.voice_states.get(guild_id)
+    if not voice_client or not voice_client.is_connected():
+        bot.queues[guild_id] = []
+        return
+
+    while queue:
+        next_item = queue.pop(0)
+        bot.queues[guild_id] = queue
+        try:
+            path, title, duration = await download_track_async(next_item['url'], next_item.get('mode', 'audio'))
+        except Exception as e:
+            rainbow_log(f"❌ Không thể tải bài trong hàng chờ: {e}")
+            await notify_channel(guild_id, next_item.get('channel_id'),
+                                 Embed(title="⚠️ Lỗi tải bài trong hàng chờ", description=str(e), color=Color.red()))
+            continue
+
+        try:
+            audio_source = discord.FFmpegPCMAudio(path, **FFMPEG_OPTIONS)
+        except Exception as e:
+            await cleanup_track_file(path)
+            rainbow_log(f"❌ Không thể phát bài trong hàng chờ: {e}")
+            continue
+
+        voice_client.play(audio_source, after=voice_after_callback(guild_id, path))
+        bot.current_tracks[guild_id] = path
+        meta = {
+            "title": title,
+            "url": next_item['url'],
+            "mode": next_item.get('mode', 'audio'),
+            "duration": duration,
+            "requester_id": next_item.get('requester_id'),
+            "channel_id": next_item.get('channel_id')
+        }
+        bot.current_meta[guild_id] = meta
+        bot.paused.discard(guild_id)
+        embed = build_music_embed(
+            title, duration, meta["mode"], voice_client.channel,
+            requester_id=meta.get("requester_id"), url=meta.get("url"),
+            queue_length=len(queue), status="▶️ Đang phát từ hàng chờ"
+        )
+        await notify_channel(guild_id, next_item.get('channel_id'), embed)
+        rainbow_log(f"▶️ Đang phát tiếp theo: {title}", is_italic=True)
+        break
 
 def load_emoji_cache():
     try:
@@ -423,6 +571,11 @@ class ThienLamSect(commands.Bot):
         super().__init__(command_prefix="!", intents=discord.Intents.all())
         self.voice_states: dict[int, discord.VoiceClient] = {}
         self.current_tracks: dict[int, str] = {}
+        self.current_meta: dict[int, dict] = {}
+        self.queues: dict[int, list[dict]] = {}
+        self.search_results: dict[int, list[dict]] = {}
+        self.paused: set[int] = set()
+        self.skip_autoplay: set[int] = set()
 
     async def setup_hook(self):
         rainbow_log(ASCII_TXA, is_ascii=True)
@@ -450,6 +603,9 @@ class ThienLamSect(commands.Bot):
                 pass
         self.voice_states.clear()
         self.current_tracks.clear()
+        self.queues.clear()
+        self.search_results.clear()
+        self.paused.clear()
         
         # Đọc database
         db = load_db()
@@ -1273,6 +1429,346 @@ async def start(interaction: discord.Interaction):
     # Gán role Phàm Nhân cho user mới
     await update_member_rank(interaction.user, 1)
     await interaction.followup.send(embed=embed)
+
+
+async def search_youtube_top5(query: str) -> list[dict]:
+    """Tìm kiếm top 5 video YouTube theo query, trả về list dict {title, url, duration, channel}."""
+
+    def _search():
+        ydl_opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "extract_flat": False,
+            "noplaylist": True,
+            "ignoreerrors": False,
+        }
+        results_local = []
+        with YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(f"ytsearch5:{query}", download=False)
+            if info and "entries" in info:
+                for entry in info["entries"][:5]:
+                    if entry:
+                        results_local.append({
+                            "title": entry.get("title", "N/A"),
+                            "url": entry.get("webpage_url", entry.get("url", "")),
+                            "duration": entry.get("duration"),
+                            "channel": entry.get("uploader", "N/A"),
+                            "id": entry.get("id", "")
+                        })
+        return results_local
+
+    try:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, _search)
+    except Exception as e:
+        rainbow_log(f"⚠️ Lỗi tìm kiếm YouTube: {e}")
+        return []
+
+
+@bot.tree.command(name="ytsearch", description="Tìm kiếm 5 video YouTube và lưu gợi ý cho /ytplay")
+@app_commands.describe(query="Từ khóa tìm kiếm")
+async def ytsearch(interaction: discord.Interaction, query: str):
+    await interaction.response.defer()
+    results = await search_youtube_top5(query)
+    if not results:
+        await interaction.followup.send("❌ Không tìm thấy video nào.", ephemeral=True)
+        return
+
+    bot.search_results[interaction.guild_id] = results
+
+    embed = Embed(title=f"🔍 Kết quả tìm kiếm: {query}", color=Color.blue())
+    for i, r in enumerate(results, 1):
+        duration = format_duration(r.get("duration"))
+        embed.add_field(
+            name=f"{i}. {r['title'][:50]}{'...' if len(r['title']) > 50 else ''}",
+            value=f"👥 {r['channel']} | ⏱️ {duration}",
+            inline=False
+        )
+    embed.set_footer(text="Gợi ý đã được lưu. Dùng /ytplay để tải video!")
+    await interaction.followup.send(embed=embed)
+
+
+async def ytplay_autocomplete(interaction: discord.Interaction, current: str):
+    guild_id = interaction.guild_id
+    if guild_id is None:
+        return []
+    results = bot.search_results.get(guild_id, [])
+    choices = []
+    for r in results:
+        title = r['title'][:80]
+        if current.lower() in title.lower() or not current:
+            choices.append(
+                app_commands.Choice(
+                    name=f"{title[:80]}{'...' if len(r['title']) > 80 else ''}",
+                    value=r['url']
+                )
+            )
+    return choices[:25]
+
+
+@bot.tree.command(name="ytplay", description="Tải & phát nhạc từ YouTube ngay trong voice channel")
+@app_commands.describe(
+    query_or_url="Từ khóa tìm kiếm hoặc đường dẫn video YouTube",
+    mode="Chọn tải dạng audio (mp3) hay video (mp4)"
+)
+@app_commands.autocomplete(query_or_url=ytplay_autocomplete)
+async def ytplay(interaction: discord.Interaction, query_or_url: str, mode: Literal["audio", "video"] = "audio"):
+    await interaction.response.defer()
+
+    voice_client = await ensure_voice_connection(interaction)
+    if not voice_client:
+        return
+
+    # Xác định URL: nếu không phải link, tìm kiếm và lấy kết quả đầu tiên
+    url = query_or_url
+    if not (query_or_url.startswith("http://") or query_or_url.startswith("https://")):
+        # Tìm kiếm và lấy video đầu tiên
+        search_results = await search_youtube_top5(query_or_url)
+        if not search_results:
+            await interaction.followup.send("❌ Không tìm thấy video nào với từ khóa này.", ephemeral=True)
+            return
+        url = search_results[0]['url']
+
+    # Nếu bot đang phát, thêm vào hàng chờ
+    if voice_client.is_playing() or interaction.guild_id in bot.paused:
+        entry, pos = await enqueue_track(
+            interaction.guild_id, url, mode, interaction.user.id,
+            interaction.channel.id if interaction.channel else None
+        )
+        embed = Embed(
+            title="➕ Đã thêm vào hàng chờ",
+            description=f"**{entry.get('title') or 'Chưa rõ'}**\n🔗 {entry['url']}",
+            color=Color.orange()
+        )
+        embed.add_field(name="Vị trí trong hàng chờ", value=f"#{pos}", inline=True)
+        embed.add_field(name="Chế độ", value=mode.upper(), inline=True)
+        await interaction.followup.send(embed=embed)
+        return
+
+    # Dừng bài hiện tại nếu có
+    await stop_current_track(interaction.guild_id)
+
+    try:
+        loop = asyncio.get_running_loop()
+        path, title, duration = await loop.run_in_executor(
+            None, lambda: download_youtube_media(url, mode)
+        )
+    except Exception as e:
+        rainbow_log(f"❌ Tải YouTube thất bại: {e}")
+        await interaction.followup.send(
+            "❌ Không thể tải nội dung từ đường dẫn cung cấp. Hãy thử link khác!",
+            ephemeral=True
+        )
+        return
+
+    try:
+        audio_source = discord.FFmpegPCMAudio(path, **FFMPEG_OPTIONS)
+    except Exception as e:
+        await cleanup_track_file(path)
+        rainbow_log(f"❌ Không thể tạo nguồn âm thanh: {e}")
+        await interaction.followup.send("⚠️ Không thể phát file vừa tải. Vui lòng thử lại!", ephemeral=True)
+        return
+
+    # Auto-join same VC as user if bot got disconnected unexpectedly
+    if not voice_client.is_connected():
+        voice_client = await ensure_voice_connection(interaction)
+        if not voice_client:
+            await cleanup_track_file(path)
+            return
+
+    voice_client.play(audio_source, after=voice_after_callback(interaction.guild_id, path))
+    bot.current_tracks[interaction.guild_id] = path
+    
+    # Lưu metadata cho now-playing
+    bot.current_meta[interaction.guild_id] = {
+        "title": title,
+        "url": url,
+        "mode": mode,
+        "duration": duration,
+        "requester_id": interaction.user.id,
+        "channel_id": interaction.channel.id if interaction.channel else None
+    }
+    bot.paused.discard(interaction.guild_id)
+
+    queue_len = len(get_guild_queue(interaction.guild_id))
+    embed = build_music_embed(
+        title, duration, mode, voice_client.channel,
+        requester_id=interaction.user.id, url=url,
+        queue_length=queue_len if queue_len > 0 else None
+    )
+    await interaction.followup.send(embed=embed)
+
+
+@bot.tree.command(name="pause", description="Tạm dừng nhạc đang phát")
+async def pause(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    voice_client = bot.voice_states.get(interaction.guild_id)
+    
+    if not voice_client or not voice_client.is_playing():
+        await interaction.followup.send("⚠️ Không có nhạc nào đang phát.", ephemeral=True)
+        return
+    
+    voice_client.pause()
+    bot.paused.add(interaction.guild_id)
+    await interaction.followup.send("⏸️ Đã tạm dừng nhạc.", ephemeral=True)
+
+
+@bot.tree.command(name="resume", description="Tiếp tục phát nhạc")
+async def resume(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    voice_client = bot.voice_states.get(interaction.guild_id)
+    
+    if not voice_client:
+        await interaction.followup.send("⚠️ Bot không ở trong voice channel.", ephemeral=True)
+        return
+    
+    if interaction.guild_id not in bot.paused:
+        await interaction.followup.send("⚠️ Nhạc không bị tạm dừng.", ephemeral=True)
+        return
+    
+    voice_client.resume()
+    bot.paused.discard(interaction.guild_id)
+    await interaction.followup.send("▶️ Đã tiếp tục phát nhạc.", ephemeral=True)
+
+
+@bot.tree.command(name="skip", description="Bỏ qua bài hiện tại và phát bài tiếp theo")
+async def skip(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    voice_client = bot.voice_states.get(interaction.guild_id)
+    
+    if not voice_client or not voice_client.is_playing():
+        await interaction.followup.send("⚠️ Không có nhạc nào đang phát.", ephemeral=True)
+        return
+    
+    queue = get_guild_queue(interaction.guild_id)
+    if queue:
+        await interaction.followup.send(f"⏭️ Đang bỏ qua... Phát tiếp: **{queue[0].get('title') or 'Chưa rõ'}**", ephemeral=True)
+    else:
+        await interaction.followup.send("⏭️ Đã bỏ qua bài hiện tại. Hàng chờ trống.", ephemeral=True)
+    
+    voice_client.stop()
+
+
+@bot.tree.command(name="stop", description="Dừng phát nhạc và xóa hàng chờ")
+async def stop(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    voice_client = bot.voice_states.get(interaction.guild_id)
+    
+    if not voice_client:
+        await interaction.followup.send("⚠️ Bot không ở trong voice channel.", ephemeral=True)
+        return
+    
+    await stop_current_track(interaction.guild_id, skip_autoplay=True)
+    bot.queues[interaction.guild_id] = []
+    await interaction.followup.send("🛑 Đã dừng phát nhạc và xóa hàng chờ.", ephemeral=True)
+
+
+@bot.tree.command(name="nowplaying", description="Xem thông tin bài đang phát")
+async def nowplaying(interaction: discord.Interaction):
+    await interaction.response.defer()
+    voice_client = bot.voice_states.get(interaction.guild_id)
+    
+    if not voice_client or not voice_client.is_playing():
+        if interaction.guild_id in bot.paused:
+            meta = bot.current_meta.get(interaction.guild_id)
+            if meta:
+                embed = build_music_embed(
+                    meta['title'], meta.get('duration'), meta.get('mode', 'audio'),
+                    voice_client.channel, requester_id=meta.get('requester_id'),
+                    url=meta.get('url'), queue_length=len(get_guild_queue(interaction.guild_id)),
+                    status="⏸️ Đang tạm dừng"
+                )
+                await interaction.followup.send(embed=embed)
+                return
+        await interaction.followup.send("⚠️ Không có nhạc nào đang phát.", ephemeral=True)
+        return
+    
+    meta = bot.current_meta.get(interaction.guild_id)
+    if not meta:
+        await interaction.followup.send("⚠️ Không tìm thấy thông tin bài hát.", ephemeral=True)
+        return
+    
+    embed = build_music_embed(
+        meta['title'], meta.get('duration'), meta.get('mode', 'audio'),
+        voice_client.channel, requester_id=meta.get('requester_id'),
+        url=meta.get('url'), queue_length=len(get_guild_queue(interaction.guild_id))
+    )
+    await interaction.followup.send(embed=embed)
+
+
+@bot.tree.command(name="queue", description="Xem hàng chờ nhạc")
+async def queue_cmd(interaction: discord.Interaction):
+    await interaction.response.defer()
+    queue = get_guild_queue(interaction.guild_id)
+    
+    if not queue:
+        await interaction.followup.send("📜 Hàng chờ trống.", ephemeral=True)
+        return
+    
+    embed = Embed(title="📜 Hàng chờ nhạc", color=Color.blue())
+    queue_text = format_queue(queue)
+    embed.description = queue_text
+    
+    meta = bot.current_meta.get(interaction.guild_id)
+    if meta:
+        embed.add_field(
+            name="🎵 Đang phát",
+            value=f"**{meta['title']}** ({format_duration(meta.get('duration'))})",
+            inline=False
+        )
+    
+    embed.set_footer(text=f"Tổng: {len(queue)} bài trong hàng chờ")
+    await interaction.followup.send(embed=embed)
+
+
+@bot.tree.command(name="clearqueue", description="Xóa toàn bộ hàng chờ")
+async def clearqueue(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    queue = get_guild_queue(interaction.guild_id)
+    
+    if not queue:
+        await interaction.followup.send("📜 Hàng chờ đã trống rồi.", ephemeral=True)
+        return
+    
+    count = len(queue)
+    bot.queues[interaction.guild_id] = []
+    await interaction.followup.send(f"🗑️ Đã xóa {count} bài khỏi hàng chờ.", ephemeral=True)
+
+
+@bot.tree.command(name="remove", description="Xóa một bài khỏi hàng chờ")
+@app_commands.describe(position="Vị trí bài cần xóa (1, 2, 3...)")
+async def remove(interaction: discord.Interaction, position: int):
+    await interaction.response.defer(ephemeral=True)
+    queue = get_guild_queue(interaction.guild_id)
+    
+    if not queue:
+        await interaction.followup.send("📜 Hàng chờ trống.", ephemeral=True)
+        return
+    
+    if position < 1 or position > len(queue):
+        await interaction.followup.send(f"⚠️ Vị trí không hợp lệ. Hàng chờ có {len(queue)} bài.", ephemeral=True)
+        return
+    
+    removed = queue.pop(position - 1)
+    await interaction.followup.send(
+        f"🗑️ Đã xóa: **{removed.get('title') or 'Chưa rõ'}**",
+        ephemeral=True
+    )
+
+
+@bot.tree.command(name="leave", description="Cho bot rời khỏi voice channel")
+async def leave(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    voice_client = bot.voice_states.get(interaction.guild_id)
+    
+    if not voice_client:
+        await interaction.followup.send("⚠️ Bot không ở trong voice channel.", ephemeral=True)
+        return
+    
+    await stop_current_track(interaction.guild_id, detach=True)
+    await interaction.followup.send("👋 Đã rời khỏi voice channel.", ephemeral=True)
+
+
 @bot.tree.command(name="nhiem_vu", description="Xem sứ mệnh hàng ngày (Cập nhật tự động)")
 async def nhiem_vu(interaction: discord.Interaction):
     # Đảm bảo đệ tử đã ghi danh trước khi defer
