@@ -7,15 +7,23 @@ import os, json, random, asyncio, pytz, sys, aiohttp
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from colorama import init, Fore, Style
+from yt_dlp import YoutubeDL
+from typing import Literal
 
 # --- KHỞI TẠO ---
 init(autoreset=True)
 load_dotenv()
 ITALIC = "\033[3m"
 RESET = Style.RESET_ALL
+DOWNLOADS_DIR = os.path.join(os.getcwd(), "downloads")
+os.makedirs(DOWNLOADS_DIR, exist_ok=True)
+FFMPEG_OPTIONS = {
+    "before_options": "-nostdin",
+    "options": "-vn"
+}
 
 # --- PHIÊN BẢN ---
-VERSION = "v7.5.0 - Thời Không Luân Chuyển"
+VERSION = "v7.6.0 - Thời Không Luân Chuyển"
 
 # --- NGHỆ THUẬT CHỮ ASCII ---
 ASCII_TXA = rf"""
@@ -53,6 +61,216 @@ def rainbow_log(msg, is_ascii=False, is_italic=False):
         now = datetime.now(pytz.timezone('Asia/Ho_Chi_Minh')).strftime("%H:%M:%S")
         colored = "".join(colors[i % len(colors)] + c for i, c in enumerate(f"[{now}] {msg}"))
         print(f"{style}{colored}{RESET}")
+
+
+class DownloadProgressPrinter:
+    """Hiển thị tiến độ tải trong một dòng trên console (không spam)."""
+
+    def __init__(self, label: str = "🎧 TẢI"):
+        self.label = label
+        self._last_len = 0
+
+    def _write(self, text: str, newline: bool = False):
+        padding = max(0, self._last_len - len(text))
+        print("\r" + text + " " * padding, end="\n" if newline else "", flush=True)
+        self._last_len = 0 if newline else len(text)
+
+    @staticmethod
+    def _format_bar(percent: float, length: int = 24) -> str:
+        percent = max(0.0, min(percent, 100.0))
+        filled = int(length * percent / 100)
+        return "█" * filled + "░" * (length - filled)
+
+    @staticmethod
+    def _human_speed(speed_bytes: float | None) -> str:
+        if not speed_bytes:
+            return "--"
+        units = ["B/s", "KB/s", "MB/s", "GB/s", "TB/s"]
+        idx = 0
+        while speed_bytes >= 1024 and idx < len(units) - 1:
+            speed_bytes /= 1024
+            idx += 1
+        return f"{speed_bytes:4.1f} {units[idx]}"
+
+    @staticmethod
+    def _format_eta(seconds: int | None) -> str:
+        if seconds is None or seconds < 0:
+            return "--:--"
+        m, s = divmod(seconds, 60)
+        h, m = divmod(m, 60)
+        if h:
+            return f"{h:02d}:{m:02d}:{s:02d}"
+        return f"{m:02d}:{s:02d}"
+
+    def update(self, percent: float, speed_bytes: float | None, eta_seconds: int | None):
+        bar = self._format_bar(percent)
+        line = (f"{self.label} [{bar}] {percent:6.2f}% | "
+                f"{self._human_speed(speed_bytes)} | ETA {self._format_eta(eta_seconds)}")
+        self._write(line)
+
+    def complete(self, message: str):
+        self._write(message, newline=True)
+
+
+def download_youtube_media(url: str, mode: Literal["audio", "video"]) -> tuple[str, str, int | None]:
+    """
+    Tải nội dung YouTube (audio/video) và trả về (đường dẫn file, tiêu đề, thời lượng giây).
+    Hiển thị tiến trình trên console bằng thanh tiến độ cập nhật tại chỗ.
+    """
+    progress = DownloadProgressPrinter()
+
+    def progress_hook(data):
+        status = data.get("status")
+        if status == "downloading":
+            percent_str = data.get("_percent_str", "0.0%").replace("%", "")
+            try:
+                percent = float(percent_str)
+            except ValueError:
+                percent = 0.0
+            progress.update(
+                percent=percent,
+                speed_bytes=data.get("speed"),
+                eta_seconds=data.get("eta")
+            )
+        elif status == "finished":
+            progress.complete("✅ Tải xong, đang xử lý bằng ffmpeg...")
+
+    output = os.path.join(DOWNLOADS_DIR, "%(title)s-%(id)s.%(ext)s")
+    ydl_opts: dict = {
+        "outtmpl": output,
+        "quiet": True,
+        "no_warnings": True,
+        "progress_hooks": [progress_hook],
+        "noplaylist": True,
+        "ignoreerrors": False,
+        "retries": 3,
+    }
+
+    if mode == "audio":
+        ydl_opts.update({
+            "format": "bestaudio/best",
+            "postprocessors": [{
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": "192",
+            }],
+            "postprocessor_args": [
+                "-ar", "48000"
+            ],
+            "prefer_ffmpeg": True,
+        })
+    else:
+        ydl_opts.update({
+            "format": "bv*+ba/best",
+            "merge_output_format": "mp4",
+            "prefer_ffmpeg": True,
+        })
+
+    with YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+        if info is None:
+            raise ValueError("Không thể lấy thông tin video từ URL cung cấp.")
+        downloaded_path = ydl.prepare_filename(info)
+
+    if mode == "audio":
+        downloaded_path = os.path.splitext(downloaded_path)[0] + ".mp3"
+    elif not downloaded_path.lower().endswith(".mp4"):
+        downloaded_path = os.path.splitext(downloaded_path)[0] + ".mp4"
+
+    title = info.get("title", "YouTube Audio")
+    duration = info.get("duration")
+
+    progress.complete(f"🎶 Đã sẵn sàng phát: {title}")
+    return downloaded_path, title, duration
+
+
+def format_duration(seconds: int | None) -> str:
+    if not seconds:
+        return "Không xác định"
+    m, s = divmod(seconds, 60)
+    h, m = divmod(m, 60)
+    if h:
+        return f"{h}h {m}m {s}s"
+    if m:
+        return f"{m}m {s}s"
+    return f"{s}s"
+
+
+async def ensure_voice_connection(interaction: discord.Interaction) -> discord.VoiceClient | None:
+    """Gia nhập voice channel của user hoặc di chuyển bot tới đó."""
+    voice_state = interaction.user.voice
+    if not voice_state or not voice_state.channel:
+        await respond_ephemeral(
+            interaction,
+            "⚠️ Ngươi phải ở trong voice channel trước khi triệu hồi âm nhạc!"
+        )
+        return None
+
+    channel = voice_state.channel
+    voice_client = interaction.guild.voice_client
+
+    if voice_client and voice_client.channel == channel:
+        return voice_client
+
+    if voice_client and voice_client.channel != channel:
+        await voice_client.move_to(channel)
+        rainbow_log(f"🎧 Di chuyển bot tới kênh {channel.name}", is_italic=True)
+        bot.voice_states[interaction.guild_id] = voice_client
+        return voice_client
+
+    voice_client = await channel.connect()
+    bot.voice_states[interaction.guild_id] = voice_client
+    rainbow_log(f"🎧 Gia nhập voice channel: {channel.name}", is_italic=True)
+    return voice_client
+
+
+async def cleanup_track_file(path: str):
+    if path and os.path.exists(path):
+        try:
+            os.remove(path)
+            rainbow_log(f"🧹 Đã xóa file tạm: {os.path.basename(path)}", is_italic=True)
+        except Exception as e:
+            rainbow_log(f"⚠️ Không thể xóa file {path}: {e}")
+
+
+async def handle_track_end(guild_id: int, path: str, error: Exception | None = None):
+    if error:
+        rainbow_log(f"❌ Lỗi khi phát nhạc: {error}")
+    bot.current_tracks.pop(guild_id, None)
+    await cleanup_track_file(path)
+
+
+def voice_after_callback(guild_id: int, path: str):
+    def _after(error: Exception | None):
+        asyncio.run_coroutine_threadsafe(
+            handle_track_end(guild_id, path, error),
+            bot.loop
+        )
+
+    return _after
+
+
+async def stop_current_track(guild_id: int, detach: bool = False):
+    voice_client = bot.voice_states.get(guild_id)
+    current_path = bot.current_tracks.pop(guild_id, None)
+
+    if voice_client and voice_client.is_playing():
+        voice_client.stop()
+
+    if current_path:
+        await cleanup_track_file(current_path)
+
+    if detach and voice_client:
+        await voice_client.disconnect(force=True)
+        bot.voice_states.pop(guild_id, None)
+        rainbow_log(f"👋 Bot đã rời khỏi voice channel của guild {guild_id}", is_italic=True)
+
+
+async def respond_ephemeral(interaction: discord.Interaction, content: str, embed: Embed | None = None):
+    if interaction.response.is_done():
+        await interaction.followup.send(content, embed=embed, ephemeral=True)
+    else:
+        await interaction.response.send_message(content, embed=embed, ephemeral=True)
 
 # --- KIỂM TRA LINH LỰC ---
 REQUIRED = ["DISCORD_TOKEN", "OPENAI_API_KEY", "ALLOWED_GUILD_IDS", "ADMIN_IDS"]
@@ -203,6 +421,8 @@ async def calculate_divine_limit(u):
 class ThienLamSect(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix="!", intents=discord.Intents.all())
+        self.voice_states: dict[int, discord.VoiceClient] = {}
+        self.current_tracks: dict[int, str] = {}
 
     async def setup_hook(self):
         rainbow_log(ASCII_TXA, is_ascii=True)
@@ -223,6 +443,13 @@ class ThienLamSect(commands.Bot):
     async def on_ready(self):
         """Tự động sync roles cho tất cả users khi bot ready"""
         rainbow_log(f"✅ Bot đã sẵn sàng! Đăng nhập: {self.user.name}", is_italic=True)
+        for vc in list(self.voice_states.values()):
+            try:
+                await vc.disconnect(force=True)
+            except Exception:
+                pass
+        self.voice_states.clear()
+        self.current_tracks.clear()
         
         # Đọc database
         db = load_db()
@@ -775,6 +1002,81 @@ async def daily(interaction: discord.Interaction):
         
     await interaction.followup.send(embed=embed)
 
+
+@bot.tree.command(name="ytplay", description="Tải & phát nhạc từ YouTube ngay trong voice channel")
+@app_commands.describe(
+    url="Đường dẫn video YouTube",
+    mode="Chọn tải dạng audio (mp3) hay video (mp4)"
+)
+async def ytplay(interaction: discord.Interaction, url: str, mode: Literal["audio", "video"] = "audio"):
+    await interaction.response.defer()
+
+    voice_client = await ensure_voice_connection(interaction)
+    if not voice_client:
+        return
+
+    await stop_current_track(interaction.guild_id)
+
+    try:
+        loop = asyncio.get_running_loop()
+        path, title, duration = await loop.run_in_executor(
+            None, lambda: download_youtube_media(url, mode)
+        )
+    except Exception as e:
+        rainbow_log(f"❌ Tải YouTube thất bại: {e}")
+        await interaction.followup.send(
+            "❌ Không thể tải nội dung từ đường dẫn cung cấp. Hãy thử link khác!",
+            ephemeral=True
+        )
+        return
+
+    try:
+        audio_source = discord.FFmpegPCMAudio(path, **FFMPEG_OPTIONS)
+    except Exception as e:
+        await cleanup_track_file(path)
+        rainbow_log(f"❌ Không thể tạo nguồn âm thanh: {e}")
+        await interaction.followup.send("⚠️ Không thể phát file vừa tải. Vui lòng thử lại!", ephemeral=True)
+        return
+
+    # Auto-join same VC as user if bot got disconnected unexpectedly
+    if not voice_client.is_connected():
+        voice_client = await ensure_voice_connection(interaction)
+        if not voice_client:
+            await cleanup_track_file(path)
+            return
+
+    voice_client.play(audio_source, after=voice_after_callback(interaction.guild_id, path))
+    bot.current_tracks[interaction.guild_id] = path
+
+    embed = Embed(
+        title="🎵 Đang phát nhạc YouTube",
+        description=f"**{title}**",
+        color=Color.purple()
+    )
+    embed.add_field(name="⏱️ Thời lượng", value=format_duration(duration), inline=True)
+    embed.add_field(name="📂 Chế độ tải", value="MP3" if mode == "audio" else "MP4", inline=True)
+    embed.add_field(name="🎧 Voice Channel", value=voice_client.channel.mention, inline=False)
+    embed.set_footer(text="Đang phát trực tiếp qua FFMPEG")
+
+    await interaction.followup.send(embed=embed)
+
+
+@bot.tree.command(name="ytstop", description="Dừng phát nhạc hoặc cho bot rời voice channel")
+@app_commands.describe(leave_voice="Chọn 'True' nếu muốn bot rời voice channel luôn")
+async def ytstop(interaction: discord.Interaction, leave_voice: bool = False):
+    await interaction.response.defer(ephemeral=True)
+    voice_client = bot.voice_states.get(interaction.guild_id)
+
+    if not voice_client:
+        await interaction.followup.send("🤔 Bot đâu có ở trong voice channel đâu?", ephemeral=True)
+        return
+
+    await stop_current_track(interaction.guild_id, detach=leave_voice)
+    message = "🛑 Đã dừng phát nhạc."
+    if leave_voice:
+        message += " Bot cũng đã rời voice channel."
+    await interaction.followup.send(message, ephemeral=True)
+
 @bot.tree.command(name="phat_truat", description="Phế tu vi đệ tử (Chỉ dành cho Tổ Sư)")
 @app_commands.describe(user="Đệ tử cần phế tu vi", ly_do="Lý do hình phạt")
 async def phat_truat(interaction: discord.Interaction, user: discord.Member, ly_do: str):
@@ -970,6 +1272,7 @@ async def start(interaction: discord.Interaction):
     
     # Gán role Phàm Nhân cho user mới
     await update_member_rank(interaction.user, 1)
+    await interaction.followup.send(embed=embed)
 @bot.tree.command(name="nhiem_vu", description="Xem sứ mệnh hàng ngày (Cập nhật tự động)")
 async def nhiem_vu(interaction: discord.Interaction):
     # Đảm bảo đệ tử đã ghi danh trước khi defer

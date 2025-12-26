@@ -4,3 +4,4 @@ python-dotenv
 colorama
 pytz
 aiohttp
+yt-dlp
