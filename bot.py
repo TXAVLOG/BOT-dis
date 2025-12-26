@@ -970,14 +970,21 @@ async def start(interaction: discord.Interaction):
     
     # Gán role Phàm Nhân cho user mới
     await update_member_rank(interaction.user, 1)
-    
-    rainbow_log(f"⛩️ {interaction.user.display_name} nhập môn Thiên Lam Tông", is_italic=True)
-    await interaction.followup.send(embed=embed)
-
 @bot.tree.command(name="nhiem_vu", description="Xem sứ mệnh hàng ngày (Cập nhật tự động)")
 async def nhiem_vu(interaction: discord.Interaction):
-    # Gọi defer ngay lập tức
-    await interaction.response.defer(ephemeral=True)
+    # Đảm bảo đệ tử đã ghi danh trước khi defer
+    if not await check_access(interaction): 
+        return
+    
+    # Gọi defer ngay lập tức (handle interaction expiry gracefully)
+    try:
+        await interaction.response.defer(ephemeral=True)
+    except discord.errors.NotFound:
+        rainbow_log("⚠️ `/nhiem_vu` interaction expired before defer.")
+        return
+    except discord.HTTPException as e:
+        rainbow_log(f"⚠️ Không thể defer `/nhiem_vu`: {e}")
+        return
     
     db = load_db(); uid = str(interaction.user.id); u = db.get(uid)
     if not u: return await interaction.followup.send("Hãy `/start` trước!", ephemeral=True)
@@ -1196,6 +1203,111 @@ async def mission_autocomplete(interaction: discord.Interaction, current: str):
     # Chỉ edit khi thành công
     await msg.edit(embed=final_embed)
 
+@bot.tree.command(name="lam_nhiem_vu", description="Thực hiện sứ mệnh với tiến độ thực tế")
+@app_commands.autocomplete(mission_id=mission_autocomplete)
+async def lam_nhiem_vu(interaction: discord.Interaction, mission_id: int):
+    """Thực hiện sứ mệnh với tiến độ thực tế"""
+    # Gọi defer ngay lập tức
+    await interaction.response.defer()
+    
+    db = load_db(); uid = str(interaction.user.id); u = db.get(uid)
+    if not u: return await interaction.followup.send("Hãy `/start` trước!", ephemeral=True)
+
+    # Kiểm tra xem đang làm nhiệm vụ khác không
+    if u.get("current_mission"):
+        return await interaction.followup.send("⚔️ Ngươi đang thực hiện nhiệm vụ khác! Hãy dùng `/nhiem_vu` để xem tiến độ.", ephemeral=True)
+    
+    # Kiểm tra xem user đã nhận nhiệm vụ chưa
+    if not u.get("missions"):
+        return await interaction.followup.send("⛩️ Ngươi chưa nhận nhiệm vụ! Hãy dùng `/nhiem_vu` để nhận nhiệm vụ hàng ngày.", ephemeral=True)
+
+    m = next((item for item in u["missions"] if item["id"] == mission_id), None)
+    if not m: return await interaction.followup.send("Sứ mệnh không tồn tại!", ephemeral=True)
+    if m.get("done"): return await interaction.followup.send("Sứ mệnh này đã hoàn thành!", ephemeral=True)
+
+
+    total_time = m.get("time_required", 10)
+    
+    # Lưu trạng thái đang làm nhiệm vụ
+    u["current_mission"] = {
+        "id": m["id"],
+        "title": m["title"],
+        "time_required": total_time,
+        "start_time": datetime.now(VN_TZ).timestamp()
+    }
+    save_db(db)
+    
+    rainbow_log(f"🎯 {u['name']} bắt đầu nhiệm vụ: {m['title']} (Tầng {u['layer']})", is_italic=True)
+    
+    for i in range(total_time + 1):
+        percent = (i / total_time) * 100
+        bar = get_progress_bar(percent)
+        embed = txa_embed("⚔️ Đang Thực Hiện Sứ Mệnh", f"Đệ tử đang nỗ lực: **{m['title']}**\n\n{bar} **{int(percent)}%**\n⏳ Còn lại: `{total_time - i}s`", Color.orange())
+        if i == 0:
+            msg = await interaction.followup.send(embed=embed)
+        else:
+            await msg.edit(embed=embed)
+        if i < total_time: await asyncio.sleep(1)
+
+    # Tính tỷ lệ thành công dựa trên độ khó
+    difficulty_rates = {"E": 95, "D": 85, "C": 75, "B": 65, "A": 50, "S": 35}
+    success_rate = difficulty_rates.get(m.get("difficulty", "E"), 80)
+    is_success = random.randint(1, 100) <= success_rate
+    
+    if is_success:
+        # THÀNH CÔNG
+        prompt = f"Đệ tử {u['name']} hoàn thành thành công '{m['title']}'. Viết 1 câu phán bảo thâm sâu về thành công này. JSON: {{\"story\": \"str\"}}"
+        res_raw = await ask_ancestor("Phán quyết sứ mệnh thành công.", prompt, json_mode=True)
+        try: res = json.loads(res_raw)
+        except: res = {"story": "Ngươi đã hoàn thành sứ mệnh một cách xuất sắc."}
+
+        m["done"] = True
+        u["exp"] += m["exp_reward"]
+        u["missions_completed"] = u.get("missions_completed", 0) + 1
+        
+        leveled_up = False
+        while u["exp"] >= u.get("goal", 100):
+            u["exp"] -= u.get("goal", 100)
+            u["layer"] += 1
+            u["goal"] = await calculate_divine_limit(u)
+            leveled_up = True
+        
+        # Clear current_mission
+        u["current_mission"] = None
+        save_db(db)
+        
+        rainbow_log(f"✅ {u['name']} hoàn thành nhiệm vụ: {m['title']} (+{m['exp_reward']} EXP)", is_italic=True)
+        
+        final_embed = txa_embed("✅ Sứ Mệnh Hoàn Tất", f"\"{res['story']}\"\n\n📈 Nhận: **{m['exp_reward']} Linh lực**.", Color.green())
+        if leveled_up:
+            final_embed.add_field(name="🔥 ĐỘT PHÁ!", value=f"Đạt tới **Tầng {u['layer']}**!", inline=False)
+            final_embed.color = Color.gold()
+            await update_member_rank(interaction.user, u['layer'])
+            rainbow_log(f"🔥 {u['name']} ĐỘT PHÁ lên Tầng {u['layer']}!", is_italic=True)
+    else:
+        # THẤT BẠI
+        prompt = f"Đệ tử {u['name']} thất bại trong '{m['title']}'. Viết 1 câu phán bảo về thất bại này (không quá nghiêm khắc). JSON: {{\"story\": \"string\"}}"
+        res_raw = await ask_ancestor("Phán quyết sứ mệnh thất bại.", prompt, json_mode=True)
+        try: res = json.loads(res_raw)
+        except: res = {"story": "Ngươi chưa đủ tu vi để hoàn thành sứ mệnh này."}
+        
+        # Không đánh dấu done, user có thể thử lại
+        # Clear current_mission
+        u["current_mission"] = None
+        save_db(db)
+        
+        rainbow_log(f"❌ {u['name']} thất bại nhiệm vụ: {m['title']}", is_italic=True)
+        
+        final_embed = txa_embed("❌ Sứ Mệnh Thất Bại", f"\"{res['story']}\"\n\n💔 Không nhận được phần thưởng. Hãy thử lại sau!", Color.red())
+        final_embed.add_field(name="🔄 Thử Lại", value="Ngươi có thể thử lại nhiệm vụ này!", inline=False)
+        
+        # Gửi message mới thay vì edit
+        await interaction.followup.send(embed=final_embed)
+        return
+    
+    # Chỉ edit khi thành công
+    await msg.edit(embed=final_embed)
+
 @bot.tree.command(name="tu_luyen", description="Tọa thiền với thanh tiến độ thời gian thực")
 async def tu_luyen(interaction: discord.Interaction):
     # Gọi defer ngay lập tức
@@ -1219,8 +1331,12 @@ async def tu_luyen(interaction: discord.Interaction):
     try: 
         res = json.loads(res_raw)
     except: 
-        # Fallback với random reward
-        exp_gain = random.randint(30, 100)
+        # Fallback: tính EXP dựa trên thời gian tu luyện và tầng hiện tại
+        level = max(1, u.get("layer", 1))
+        duration_bonus = duration * 5           # mỗi giây ~5 EXP
+        level_bonus = min(250, level * 1.5)     # giới hạn để tránh vượt trội
+        exp_gain = int(20 + duration_bonus + level_bonus)
+        exp_gain = max(25, min(exp_gain, 500))  # clamp để giữ cân bằng
         stories = [
             "Linh khí hội tụ, kinh mạch thông suốt.",
             "Ngươi lĩnh ngộ được chút đạo lý tu tiên.",
