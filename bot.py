@@ -126,11 +126,20 @@ def download_youtube_media(url: str, mode: Literal["audio", "video"]) -> tuple[s
     def progress_hook(data):
         status = data.get("status")
         if status == "downloading":
-            percent_str = data.get("_percent_str", "0.0%").replace("%", "")
-            try:
-                percent = float(percent_str)
-            except ValueError:
-                percent = 0.0
+            # Tính percent từ downloaded_bytes và total_bytes
+            downloaded = data.get("downloaded_bytes", 0)
+            total = data.get("total_bytes") or data.get("total_bytes_estimate", 0)
+            
+            if total > 0:
+                percent = (downloaded / total) * 100
+            else:
+                # Fallback về _percent_str nếu không có bytes info
+                percent_str = data.get("_percent_str", "0.0%").replace("%", "").strip()
+                try:
+                    percent = float(percent_str)
+                except ValueError:
+                    percent = 0.0
+            
             progress.update(
                 percent=percent,
                 speed_bytes=data.get("speed"),
