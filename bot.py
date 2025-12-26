@@ -10,6 +10,7 @@ from yt_dlp import YoutubeDL
 from typing import Literal
 from uuid import uuid4
 from gtts import gTTS
+from openai import OpenAI
 
 # --- KHỞI TẠO ---
 init(autoreset=True)
