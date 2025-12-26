@@ -6,3 +6,4 @@ pytz
 aiohttp
 yt-dlp
 PyNaCl
+gTTS
