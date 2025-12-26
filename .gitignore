@@ -1,0 +1,30 @@
+# Environment variables (chứa secrets)
+.env
+Sercurity/.env
+Sercurity/env
+
+# Database files
+*.json
+!requirements.json
+
+# Cache
+cache/
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Python
+*.egg-info/
+dist/
+build/
