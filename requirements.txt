@@ -1,7 +1,8 @@
-discord.py
+discord.py[voice]
 openai
 python-dotenv
 colorama
 pytz
 aiohttp
 yt-dlp
+PyNaCl

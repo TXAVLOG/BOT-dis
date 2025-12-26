@@ -225,12 +225,26 @@ async def ensure_voice_connection(interaction: discord.Interaction) -> discord.V
 
 
 async def cleanup_track_file(path: str):
-    if path and os.path.exists(path):
+    if not path or not os.path.exists(path):
+        return
+    
+    # Chờ ffmpeg giải phóng file
+    await asyncio.sleep(0.5)
+    
+    # Thử xóa với retry
+    for attempt in range(3):
         try:
             os.remove(path)
             rainbow_log(f"🧹 Đã xóa file tạm: {os.path.basename(path)}", is_italic=True)
+            return
+        except PermissionError:
+            if attempt < 2:
+                await asyncio.sleep(1)
+            else:
+                rainbow_log(f"⚠️ File vẫn đang được sử dụng, sẽ xóa sau: {os.path.basename(path)}")
         except Exception as e:
             rainbow_log(f"⚠️ Không thể xóa file {path}: {e}")
+            return
 
 
 async def handle_track_end(guild_id: int, path: str, error: Exception | None = None):
@@ -1433,11 +1447,10 @@ async def ytplay_autocomplete(interaction: discord.Interaction, current: str):
 
 @bot.tree.command(name="ytplay", description="Tải & phát nhạc từ YouTube ngay trong voice channel")
 @app_commands.describe(
-    query_or_url="Từ khóa tìm kiếm hoặc đường dẫn video YouTube",
-    mode="Chọn tải dạng audio (mp3) hay video (mp4)"
+    query_or_url="Từ khóa tìm kiếm hoặc đường dẫn video YouTube"
 )
 @app_commands.autocomplete(query_or_url=ytplay_autocomplete)
-async def ytplay(interaction: discord.Interaction, query_or_url: str, mode: Literal["audio", "video"] = "audio"):
+async def ytplay(interaction: discord.Interaction, query_or_url: str):
     await interaction.response.defer()
 
     voice_client = await ensure_voice_connection(interaction)
@@ -1446,6 +1459,7 @@ async def ytplay(interaction: discord.Interaction, query_or_url: str, mode: Lite
 
     # Xác định URL: nếu không phải link, tìm kiếm và lấy kết quả đầu tiên
     url = query_or_url
+    video_title = None
     if not (query_or_url.startswith("http://") or query_or_url.startswith("https://")):
         # Tìm kiếm và lấy video đầu tiên
         search_results = await search_youtube_top5(query_or_url)
@@ -1453,7 +1467,30 @@ async def ytplay(interaction: discord.Interaction, query_or_url: str, mode: Lite
             await interaction.followup.send("❌ Không tìm thấy video nào với từ khóa này.", ephemeral=True)
             return
         url = search_results[0]['url']
+        video_title = search_results[0]['title']
+    
+    # Lấy thông tin video để kiểm tra karaoke
+    if not video_title:
+        info = await fetch_video_info(url)
+        if info:
+            video_title = info.get('title', '')
+    
+    # Kiểm tra karaoke
+    if video_title:
+        title_lower = video_title.lower()
+        karaoke_keywords = ['karaoke', 'instrumental', 'beat', 'lyrics', 'sing along']
+        if any(kw in title_lower for kw in karaoke_keywords):
+            embed = Embed(
+                title="🎤 Phát hiện Karaoke",
+                description=f"**{video_title}**\n\n⚠️ Bot không hỗ trợ phát karaoke.\n💡 Vui lòng chọn bản gốc có giọng hát!\n\n🎬 **Xem video karaoke:**",
+                color=Color.red()
+            )
+            # Gửi embed + link riêng để Discord tự động preview video
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            await interaction.followup.send(url, ephemeral=True)
+            return
 
+    mode = "audio"
     # Nếu bot đang phát, thêm vào hàng chờ
     if voice_client.is_playing() or interaction.guild_id in bot.paused:
         entry, pos = await enqueue_track(
@@ -1462,16 +1499,24 @@ async def ytplay(interaction: discord.Interaction, query_or_url: str, mode: Lite
         )
         embed = Embed(
             title="➕ Đã thêm vào hàng chờ",
-            description=f"**{entry.get('title') or 'Chưa rõ'}**\n🔗 {entry['url']}",
+            description=f"**{entry.get('title') or 'Chưa rõ'}**\n🔗 [Xem trên YouTube]({entry['url']})",
             color=Color.orange()
         )
         embed.add_field(name="Vị trí trong hàng chờ", value=f"#{pos}", inline=True)
-        embed.add_field(name="Chế độ", value=mode.upper(), inline=True)
+        embed.add_field(name="🎵 Chế độ", value="AUDIO", inline=True)
         await interaction.followup.send(embed=embed)
         return
 
     # Dừng bài hiện tại nếu có
     await stop_current_track(interaction.guild_id)
+
+    # Gửi message tiến độ tải
+    progress_embed = Embed(
+        title="⏳ Đang tải...",
+        description=f"🔗 [YouTube]({url})\n📥 Đang tải audio...",
+        color=Color.blue()
+    )
+    progress_msg = await interaction.followup.send(embed=progress_embed)
 
     try:
         loop = asyncio.get_running_loop()
@@ -1480,10 +1525,12 @@ async def ytplay(interaction: discord.Interaction, query_or_url: str, mode: Lite
         )
     except Exception as e:
         rainbow_log(f"❌ Tải YouTube thất bại: {e}")
-        await interaction.followup.send(
-            "❌ Không thể tải nội dung từ đường dẫn cung cấp. Hãy thử link khác!",
-            ephemeral=True
+        error_embed = Embed(
+            title="❌ Lỗi tải",
+            description="Không thể tải nội dung từ đường dẫn cung cấp. Hãy thử link khác!",
+            color=Color.red()
         )
+        await progress_msg.edit(embed=error_embed)
         return
 
     try:
@@ -1491,7 +1538,12 @@ async def ytplay(interaction: discord.Interaction, query_or_url: str, mode: Lite
     except Exception as e:
         await cleanup_track_file(path)
         rainbow_log(f"❌ Không thể tạo nguồn âm thanh: {e}")
-        await interaction.followup.send("⚠️ Không thể phát file vừa tải. Vui lòng thử lại!", ephemeral=True)
+        error_embed = Embed(
+            title="❌ Lỗi phát nhạc",
+            description="Không thể phát file vừa tải. Vui lòng thử lại!",
+            color=Color.red()
+        )
+        await progress_msg.edit(embed=error_embed)
         return
 
     # Auto-join same VC as user if bot got disconnected unexpectedly
@@ -1521,7 +1573,7 @@ async def ytplay(interaction: discord.Interaction, query_or_url: str, mode: Lite
         requester_id=interaction.user.id, url=url,
         queue_length=queue_len if queue_len > 0 else None
     )
-    await interaction.followup.send(embed=embed)
+    await progress_msg.edit(embed=embed)
 
 
 @bot.tree.command(name="pause", description="Tạm dừng nhạc đang phát")
