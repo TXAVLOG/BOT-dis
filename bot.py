@@ -668,12 +668,11 @@ async def daily(interaction: discord.Interaction):
     
     if db[uid].get("last_daily", 0) > reset.timestamp():
         next_7am = reset + timedelta(days=1)
-        await interaction.response.send_message("⏳ Đang tính toán thời gian còn lại...", ephemeral=True)
-        
-        # Xóa message tính toán
-        await interaction.delete_original_response()
+        # Sử dụng defer trước khi tính toán để tránh hết hạn interaction
+        await interaction.response.defer(ephemeral=True)
         
         # Hiển thị countdown real-time
+        msg = None
         for i in range(900):  # 15 phút countdown
             rem = next_7am - datetime.now(VN_TZ)
             if rem.total_seconds() <= 0: 
@@ -694,7 +693,9 @@ async def daily(interaction: discord.Interaction):
             if i == 0:
                 msg = await interaction.followup.send(embed=embed, ephemeral=True)
             else:
-                await msg.edit(embed=embed)
+                try:
+                    await msg.edit(embed=embed)
+                except: break # Phòng trường hợp user đóng message
             
             await asyncio.sleep(1)
         return
@@ -707,36 +708,31 @@ async def daily(interaction: discord.Interaction):
     current_streak = db[uid].get("daily_streak", 0)
     
     if last_daily_date:
-        # Parse last date
         try:
-            last_date_obj = datetime.strptime(last_daily_date, "%Y-%m-%d")
             yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
-            
             if last_daily_date == yesterday:
-                # Điểm danh liên tục → tăng streak
                 current_streak += 1
             elif last_daily_date != today:
-                # Bỏ lỡ → reset streak
                 current_streak = 1
         except:
             current_streak = 1
     else:
-        # Lần đầu điểm danh
         current_streak = 1
     
     # Tính phần thưởng
     base_reward = 1000
-    streak_bonus = current_streak * 100  # Mỗi ngày streak +100 EXP
+    streak_bonus = current_streak * 100
     total_reward = base_reward + streak_bonus
     
-    # AI tạo câu chuyện
-    prompt = f"Đệ tử {db[uid]['name']} điểm danh ngày thứ {current_streak} liên tục, nhận {total_reward} linh lực. Viết 1 câu chuyện ngắn thâm sâu. JSON: {{\"story\": \"string\"}}"
-    res_raw = await ask_ancestor("Thiên Đạo ban phước.", prompt, json_mode=True)
+    # AI tạo câu chuyện (Xử lý lỗi quota)
+    story = "Thiên Đạo cảm ứng, ban xuống linh khí dồi dào thấm nhuần kinh mạch."
     try:
+        prompt = f"Đệ tử {db[uid]['name']} điểm danh ngày thứ {current_streak} liên tục, nhận {total_reward} linh lực. Viết 1 câu chuyện ngắn thâm sâu. JSON: {{\"story\": \"string\"}}"
+        res_raw = await ask_ancestor("Thiên Đạo ban phước.", prompt, json_mode=True)
         res = json.loads(res_raw)
-        story = res.get("story", "Thiên Đạo cảm ứng, ban xuống linh khí dồi dào.")
-    except:
-        story = "Linh khí từ cửu thiên đổ xuống, thấm nhuần kinh mạch của ngươi."
+        story = res.get("story", story)
+    except Exception as e:
+        rainbow_log(f"⚠️ Dùng fallback story do lỗi AI: {e}")
 
     # Cập nhật database
     db[uid]["exp"] += total_reward
@@ -754,12 +750,9 @@ async def daily(interaction: discord.Interaction):
     
     save_db(db)
     
-    # Tạo embed với streak info
     streak_emoji = number_to_emoji(current_streak)
-    
     embed = txa_embed("🎁 Thiên Đạo Ban Phước", f"**Tổ sư phán:** \"{story}\"", Color.blue())
     
-    # Phần thưởng
     reward_text = f"💰 **Phần thưởng:**\n"
     reward_text += f"  • Cơ bản: `{base_reward} EXP`\n"
     if streak_bonus > 0:
@@ -767,7 +760,6 @@ async def daily(interaction: discord.Interaction):
     reward_text += f"  • **Tổng cộng: `{total_reward} EXP`**"
     embed.add_field(name="📈 Linh Lực Nhận Được", value=reward_text, inline=False)
     
-    # Streak info
     streak_text = f"🔥 **Chuỗi hiện tại:** {streak_emoji} ngày\n"
     streak_text += f"⚠️ Đừng quên điểm danh ngày mai để giữ streak!"
     embed.add_field(name="📅 Điểm Danh Liên Tục", value=streak_text, inline=False)
