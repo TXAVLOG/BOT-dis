@@ -27,7 +27,7 @@ FFMPEG_OPTIONS = {
 }
 
 # --- PHIÊN BẢN ---
-VERSION = "v8.0.0 - Âm Nhạc Thiên Đạo"
+VERSION = "v8.1.0 - Âm Nhạc Thiên Đạo"
 
 # --- NGHỆ THUẬT CHỮ ASCII ---
 ASCII_TXA = rf"""
@@ -126,11 +126,20 @@ def download_youtube_media(url: str, mode: Literal["audio", "video"]) -> tuple[s
     def progress_hook(data):
         status = data.get("status")
         if status == "downloading":
-            percent_str = data.get("_percent_str", "0.0%").replace("%", "")
-            try:
-                percent = float(percent_str)
-            except ValueError:
-                percent = 0.0
+            # Tính percent từ downloaded_bytes và total_bytes
+            downloaded = data.get("downloaded_bytes", 0)
+            total = data.get("total_bytes") or data.get("total_bytes_estimate", 0)
+            
+            if total > 0:
+                percent = (downloaded / total) * 100
+            else:
+                # Fallback về _percent_str nếu không có bytes info
+                percent_str = data.get("_percent_str", "0.0%").replace("%", "").strip()
+                try:
+                    percent = float(percent_str)
+                except ValueError:
+                    percent = 0.0
+            
             progress.update(
                 percent=percent,
                 speed_bytes=data.get("speed"),
@@ -432,6 +441,51 @@ def save_db(data):
 # --- EMOJI CACHE SYSTEM ---
 EMOJI_CACHE_FILE = "cache/emoji_cache.json"
 
+# --- MUSIC ACCESS CONTROL ---
+async def check_music_access(interaction: discord.Interaction, deferred: bool = False) -> bool:
+    """Kiểm tra quyền truy cập music commands: phải có Trúc Cơ+ và streak 2+ ngày (Admin bypass)"""
+    # Admin có full quyền
+    if interaction.user.id in ADMIN_IDS:
+        return True
+    
+    db = load_db()
+    uid = str(interaction.user.id)
+    
+    # Kiểm tra đã start chưa
+    if uid not in db:
+        msg = "⛩️ Ngươi chưa ghi danh nhập môn! Hãy dùng `/start` để bắt đầu tu luyện trước khi sử dụng chức năng âm nhạc."
+        if deferred:
+            await interaction.followup.send(msg, ephemeral=True)
+        else:
+            await interaction.response.send_message(msg, ephemeral=True)
+        return False
+    
+    user_data = db[uid]
+    layer = user_data.get('layer', 1)
+    streak = user_data.get('daily_streak', 0)
+    
+    # Kiểm tra cảnh giới: cần Trúc Cơ (layer 20+)
+    if layer < 20:
+        rank_name, _ = get_rank_info(layer)
+        msg = f"🚫 Tu vi chưa đủ! Cần đạt **Trúc Cơ** (Tầng 20+) để sử dụng chức năng âm nhạc.\n📊 Tu vi hiện tại: **{rank_name}** - Tầng {layer}"
+        if deferred:
+            await interaction.followup.send(msg, ephemeral=True)
+        else:
+            await interaction.response.send_message(msg, ephemeral=True)
+        return False
+    
+    # Kiểm tra streak: cần 2+ ngày
+    if streak < 2:
+        msg = f"🔥 Chưa đủ nghị lực! Cần điểm danh liên tục **2 ngày trở lên** để sử dụng chức năng âm nhạc.\n📅 Streak hiện tại: **{streak} ngày**\n💡 Dùng `/daily` để điểm danh mỗi ngày!"
+        if deferred:
+            await interaction.followup.send(msg, ephemeral=True)
+        else:
+            await interaction.response.send_message(msg, ephemeral=True)
+        return False
+    
+    return True
+
+
 # --- MUSIC QUEUE HELPERS ---
 def format_queue(queue: list[dict]) -> str:
     lines = []
@@ -473,13 +527,24 @@ async def fetch_video_info(url: str) -> dict | None:
 async def enqueue_track(guild_id: int, url: str, mode: str, requester_id: int | None, channel_id: int | None):
     info = await fetch_video_info(url)
     queue = get_guild_queue(guild_id)
+    
+    # Lấy thumbnail từ info
+    thumb = None
+    if info:
+        thumb = info.get("thumbnail")
+        if not thumb:
+            thumbs = info.get("thumbnails")
+            if isinstance(thumbs, list) and thumbs:
+                thumb = thumbs[0].get("url")
+    
     entry = {
         "url": url,
         "mode": mode,
         "title": info.get("title") if info else None,
         "duration": info.get("duration") if info else None,
         "requester_id": requester_id,
-        "channel_id": channel_id
+        "channel_id": channel_id,
+        "thumbnail": thumb
     }
     queue.append(entry)
     return entry, len(queue)
@@ -717,12 +782,45 @@ async def play_next(guild_id: int):
         bot.current_meta[guild_id] = meta
         mark_track_started(meta)
         bot.paused.discard(guild_id)
+        
+        # Tải thumbnail cho queue playback notification
+        thumb_url = next_item.get('thumbnail')
+        thumb_file = None
+        if thumb_url and thumb_url.startswith("http"):
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(thumb_url) as resp:
+                        if resp.status == 200:
+                            data = await resp.read()
+                            thumb_file = discord.File(io.BytesIO(data), filename="queue_thumb.jpg")
+            except Exception as e:
+                rainbow_log(f"⚠️ Không tải được thumbnail cho queue: {e}")
+        
+        # Tạo embed với progress
+        elapsed = get_track_elapsed_seconds(meta)
+        progress_text, _ = format_playback_progress(elapsed, duration)
         embed = build_music_embed(
             title, duration, meta["mode"], voice_client.channel,
             requester_id=meta.get("requester_id"), url=meta.get("url"),
-            queue_length=len(queue), status="▶️ Đang phát từ hàng chờ"
+            queue_length=len(queue), status="▶️ Đang phát từ hàng chờ",
+            progress_text=progress_text
         )
-        await notify_channel(guild_id, next_item.get('channel_id'), embed)
+        if thumb_url:
+            if thumb_file:
+                embed.set_thumbnail(url="attachment://queue_thumb.jpg")
+            else:
+                embed.set_thumbnail(url=thumb_url)
+        
+        channel = bot.get_channel(next_item.get('channel_id'))
+        if channel:
+            try:
+                if thumb_file:
+                    await channel.send(embed=embed, file=thumb_file)
+                else:
+                    await channel.send(embed=embed)
+            except Exception as e:
+                rainbow_log(f"⚠️ Không thể gửi thông báo nhạc: {e}")
+        
         await update_now_playing_message(guild_id)
         rainbow_log(f"▶️ Đang phát tiếp theo: {title}", is_italic=True)
         break
@@ -1680,6 +1778,94 @@ async def search_youtube_top5(query: str) -> list[dict]:
         return []
 
 
+class SearchResultView(discord.ui.View):
+    def __init__(self, guild_id: int, results: list[dict]):
+        super().__init__(timeout=300)
+        self.guild_id = guild_id
+        self.results = results
+        for idx, r in enumerate(results[:5], 1):
+            button = discord.ui.Button(
+                label=f"▶️ {idx}",
+                style=discord.ButtonStyle.primary,
+                custom_id=f"play_{idx}",
+                row=0 if idx <= 3 else 1
+            )
+            button.callback = self.create_play_callback(idx - 1)
+            self.add_item(button)
+
+    def create_play_callback(self, index: int):
+        async def callback(interaction: discord.Interaction):
+            if not await check_music_access(interaction):
+                return
+            result = self.results[index]
+            await interaction.response.defer()
+            await play_track_from_result(interaction, result)
+        return callback
+
+
+async def play_track_from_result(interaction: discord.Interaction, result: dict):
+    """Helper to play a track from search result dict"""
+    voice_client = await ensure_voice_connection(interaction)
+    if not voice_client:
+        return
+
+    url = result['url']
+    video_title = result.get('title', 'Unknown')
+    
+    # Kiểm tra karaoke
+    if video_title and is_karaoke(video_title):
+        await interaction.followup.send(
+            f"🚫 Video **{video_title}** bị phát hiện là karaoke.\n🔗 {url}",
+            ephemeral=True
+        )
+        if voice_client.channel:
+            await play_tts_warning(voice_client, "Cảnh báo! Video karaoke không được phép phát.")
+        return
+
+    guild_id = interaction.guild_id
+    if voice_client.is_playing():
+        entry, pos = await enqueue_track(guild_id, url, "audio", interaction.user.id, interaction.channel_id)
+        title_display = entry.get('title') or video_title
+        await interaction.followup.send(
+            f"➕ Đã thêm vào hàng chờ (vị trí #{pos}): **{title_display}**",
+            ephemeral=True
+        )
+        return
+
+    await stop_current_track(guild_id)
+    await interaction.followup.send(f"⏳ Đang tải: **{video_title}**...")
+
+    try:
+        path, title, duration = await download_track_async(url, "audio")
+    except Exception as e:
+        await interaction.followup.send(f"❌ Lỗi tải video: {e}", ephemeral=True)
+        return
+
+    voice_client.play(
+        discord.FFmpegPCMAudio(path, **FFMPEG_OPTIONS),
+        after=voice_after_callback(guild_id, path)
+    )
+
+    bot.current_tracks[guild_id] = path
+    meta = {
+        "title": title,
+        "url": url,
+        "mode": "audio",
+        "duration": duration,
+        "requester_id": interaction.user.id,
+        "channel_id": interaction.channel_id
+    }
+    bot.current_meta[guild_id] = meta
+    mark_track_started(meta)
+    bot.paused.discard(guild_id)
+
+    await update_now_playing_message(
+        guild_id,
+        channel_id=interaction.channel_id
+    )
+    rainbow_log(f"▶️ Đang phát: {title}", is_italic=True)
+
+
 @bot.tree.command(name="ytsearch", description="Tìm kiếm 5 video YouTube và lưu gợi ý cho /ytplay")
 @app_commands.describe(query="Từ khóa tìm kiếm")
 async def ytsearch(interaction: discord.Interaction, query: str):
@@ -1723,10 +1909,12 @@ async def ytsearch(interaction: discord.Interaction, query: str):
                 embed.set_image(url=thumb_url)
             embeds.append(embed)
 
+    view = SearchResultView(interaction.guild_id, results)
     await interaction.followup.send(
-        content=f"🔍 **{len(results)} kết quả cho** `{query}`",
+        content=f"🔍 **{len(results)} kết quả cho** `{query}`\n💡 Bấm nút ▶️ để phát ngay!",
         embeds=embeds[:10],
-        files=files or None
+        files=files or None,
+        view=view
     )
 
 
@@ -1766,20 +1954,10 @@ async def ytplay_autocomplete(interaction: discord.Interaction, current: str):
 
     cache_entry = bot.search_cache.get(guild_id)
     now = time.time()
-    if cache_entry and cache_entry.get("query") == query and now - cache_entry.get("ts", 0) < 5:
+    if cache_entry and cache_entry.get("query") == query and now - cache_entry.get("ts", 0) < 30:
         return _autocomplete_choices(cache_entry.get("results", []), current)
 
-    try:
-        new_results = await search_youtube_top5(query)
-    except Exception as e:
-        rainbow_log(f"⚠️ Autocomplete search error: {e}")
-        return []
-
-    if new_results:
-        bot.search_cache[guild_id] = {"query": query, "results": new_results, "ts": now}
-        bot.search_results[guild_id] = new_results
-        return _autocomplete_choices(new_results, current)
-
+    # Không tìm kiếm trong autocomplete nếu quá chậm, trả về empty để tránh timeout
     return []
 
 
@@ -1790,6 +1968,8 @@ async def ytplay_autocomplete(interaction: discord.Interaction, current: str):
 @app_commands.autocomplete(query_or_url=ytplay_autocomplete)
 async def ytplay(interaction: discord.Interaction, query_or_url: str):
     await interaction.response.defer()
+    if not await check_music_access(interaction, deferred=True):
+        return
 
     voice_client = await ensure_voice_connection(interaction)
     if not voice_client:
@@ -1924,6 +2104,8 @@ async def ytplay(interaction: discord.Interaction, query_or_url: str):
 @bot.tree.command(name="pause", description="Tạm dừng nhạc đang phát")
 async def pause(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
+    if not await check_music_access(interaction, deferred=True):
+        return
     voice_client = bot.voice_states.get(interaction.guild_id)
     
     if not voice_client or not voice_client.is_playing():
@@ -1942,6 +2124,8 @@ async def pause(interaction: discord.Interaction):
 @bot.tree.command(name="resume", description="Tiếp tục phát nhạc")
 async def resume(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
+    if not await check_music_access(interaction, deferred=True):
+        return
     voice_client = bot.voice_states.get(interaction.guild_id)
     
     if not voice_client:
@@ -1964,6 +2148,8 @@ async def resume(interaction: discord.Interaction):
 @bot.tree.command(name="skip", description="Bỏ qua bài hiện tại và phát bài tiếp theo")
 async def skip(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
+    if not await check_music_access(interaction, deferred=True):
+        return
     voice_client = bot.voice_states.get(interaction.guild_id)
     
     if not voice_client or not voice_client.is_playing():
@@ -1982,6 +2168,8 @@ async def skip(interaction: discord.Interaction):
 @bot.tree.command(name="stop", description="Dừng phát nhạc và xóa hàng chờ")
 async def stop(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
+    if not await check_music_access(interaction, deferred=True):
+        return
     voice_client = bot.voice_states.get(interaction.guild_id)
     
     if not voice_client:
@@ -2029,6 +2217,8 @@ async def nowplaying(interaction: discord.Interaction):
 @bot.tree.command(name="queue", description="Xem hàng chờ nhạc")
 async def queue_cmd(interaction: discord.Interaction):
     await interaction.response.defer()
+    if not await check_music_access(interaction):
+        return
     queue = get_guild_queue(interaction.guild_id)
     
     if not queue:
@@ -2054,6 +2244,8 @@ async def queue_cmd(interaction: discord.Interaction):
 @bot.tree.command(name="clearqueue", description="Xóa toàn bộ hàng chờ")
 async def clearqueue(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
+    if not await check_music_access(interaction, deferred=True):
+        return
     queue = get_guild_queue(interaction.guild_id)
     
     if not queue:
@@ -2069,6 +2261,8 @@ async def clearqueue(interaction: discord.Interaction):
 @app_commands.describe(position="Vị trí bài cần xóa (1, 2, 3...)")
 async def remove(interaction: discord.Interaction, position: int):
     await interaction.response.defer(ephemeral=True)
+    if not await check_music_access(interaction, deferred=True):
+        return
     queue = get_guild_queue(interaction.guild_id)
     
     if not queue:
@@ -2089,6 +2283,8 @@ async def remove(interaction: discord.Interaction, position: int):
 @bot.tree.command(name="leave", description="Cho bot rời khỏi voice channel")
 async def leave(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
+    if not await check_music_access(interaction, deferred=True):
+        return
     voice_client = bot.voice_states.get(interaction.guild_id)
     
     if not voice_client:
