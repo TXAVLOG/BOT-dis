@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import discord
 from discord import app_commands, Embed, Color
 from discord.ext import commands, tasks
