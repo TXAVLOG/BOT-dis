@@ -797,11 +797,11 @@ async def phat_truat(interaction: discord.Interaction, user: discord.Member, ly_
 
 @bot.tree.command(name="info", description="Xem thông tin tu luyện hiện tại")
 async def info(interaction: discord.Interaction):
+    await interaction.response.defer()
     if not await check_access(interaction): return
     db = load_db(); uid = str(interaction.user.id)
     user = db[uid]
-    
-    await interaction.response.defer()
+
     
     # Lấy thông tin cảnh giới
     rank_name, rank_info = get_rank_info(user['layer'])
@@ -907,9 +907,9 @@ async def bxh(interaction: discord.Interaction):
 
 @bot.tree.command(name="start", description="Ghi danh vào Thiên Lam Tông")
 async def start(interaction: discord.Interaction):
-    db = load_db(); uid = str(interaction.user.id)
-    if uid in db: return await interaction.response.send_message("Ngươi đã ghi danh rồi!", ephemeral=True)
     await interaction.response.defer()
+    db = load_db(); uid = str(interaction.user.id)
+    if uid in db: return await interaction.followup.send("Ngươi đã ghi danh rồi!", ephemeral=True)
     
     # AI tạo lời chào đón
     msg = await ask_ancestor(
@@ -975,9 +975,11 @@ async def start(interaction: discord.Interaction):
 
 @bot.tree.command(name="nhiem_vu", description="Xem sứ mệnh hàng ngày (Cập nhật tự động)")
 async def nhiem_vu(interaction: discord.Interaction):
-    db = load_db(); uid = str(interaction.user.id); u = db.get(uid)
-    if not u: return await interaction.response.send_message("Hãy `/start` trước!", ephemeral=True)
+    # Gọi defer ngay lập tức
+    await interaction.response.defer(ephemeral=True)
     
+    db = load_db(); uid = str(interaction.user.id); u = db.get(uid)
+    if not u: return await interaction.followup.send("Hãy `/start` trước!", ephemeral=True)
     
     # Không có nhiệm vụ đang làm, hoặc có thì cũng hiển thị danh sách với status động
     now_ts = datetime.now(VN_TZ).timestamp()
@@ -985,12 +987,9 @@ async def nhiem_vu(interaction: discord.Interaction):
     if datetime.now(VN_TZ) < today_7am: today_7am -= timedelta(days=1)
     
     if u.get("last_mission_reset", 0) < today_7am.timestamp():
-        await interaction.response.defer(ephemeral=True)
         u["missions"] = await generate_daily_missions(u['layer'])
         u["last_mission_reset"] = now_ts
         save_db(db)
-    else:
-        await interaction.response.defer(ephemeral=True)
 
 
 
@@ -1087,22 +1086,25 @@ async def mission_autocomplete(interaction: discord.Interaction, current: str):
 @bot.tree.command(name="lam_nhiem_vu", description="Thực hiện sứ mệnh với tiến độ thực tế")
 @app_commands.autocomplete(mission_id=mission_autocomplete)
 async def lam_nhiem_vu(interaction: discord.Interaction, mission_id: int):
+    # Gọi defer ngay lập tức
+    await interaction.response.defer()
+    
     db = load_db(); uid = str(interaction.user.id); u = db.get(uid)
-    if not u: return await interaction.response.send_message("Hãy `/start` trước!", ephemeral=True)
+    if not u: return await interaction.followup.send("Hãy `/start` trước!", ephemeral=True)
     
     # Kiểm tra xem đang làm nhiệm vụ khác không
     if u.get("current_mission"):
-        return await interaction.response.send_message("⚔️ Ngươi đang thực hiện nhiệm vụ khác! Hãy dùng `/nhiem_vu` để xem tiến độ.", ephemeral=True)
+        return await interaction.followup.send("⚔️ Ngươi đang thực hiện nhiệm vụ khác! Hãy dùng `/nhiem_vu` để xem tiến độ.", ephemeral=True)
     
     # Kiểm tra xem user đã nhận nhiệm vụ chưa
     if not u.get("missions"):
-        return await interaction.response.send_message("⛩️ Ngươi chưa nhận nhiệm vụ! Hãy dùng `/nhiem_vu` để nhận nhiệm vụ hàng ngày.", ephemeral=True)
+        return await interaction.followup.send("⛩️ Ngươi chưa nhận nhiệm vụ! Hãy dùng `/nhiem_vu` để nhận nhiệm vụ hàng ngày.", ephemeral=True)
 
     m = next((item for item in u["missions"] if item["id"] == mission_id), None)
-    if not m: return await interaction.response.send_message("Sứ mệnh không tồn tại!", ephemeral=True)
-    if m.get("done"): return await interaction.response.send_message("Sứ mệnh này đã hoàn thành!", ephemeral=True)
+    if not m: return await interaction.followup.send("Sứ mệnh không tồn tại!", ephemeral=True)
+    if m.get("done"): return await interaction.followup.send("Sứ mệnh này đã hoàn thành!", ephemeral=True)
 
-    await interaction.response.defer()
+
     total_time = m.get("time_required", 10)
     
     # Lưu trạng thái đang làm nhiệm vụ
@@ -1187,10 +1189,12 @@ async def lam_nhiem_vu(interaction: discord.Interaction, mission_id: int):
 
 @bot.tree.command(name="tu_luyen", description="Tọa thiền với thanh tiến độ thời gian thực")
 async def tu_luyen(interaction: discord.Interaction):
-    db = load_db(); uid = str(interaction.user.id); u = db.get(uid)
-    if not u: return await interaction.response.send_message("Hãy `/start` trước!", ephemeral=True)
-    
+    # Gọi defer ngay lập tức
     await interaction.response.defer()
+    
+    db = load_db(); uid = str(interaction.user.id); u = db.get(uid)
+    if not u: return await interaction.followup.send("Hãy `/start` trước!", ephemeral=True)
+
     duration = random.randint(4, 15)  # Random 4-15 giây
     rainbow_log(f"🧘 {u['name']} bắt đầu tu luyện ({duration}s)", is_italic=True)
     for i in range(duration + 1):
