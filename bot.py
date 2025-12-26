@@ -1071,17 +1071,26 @@ async def nhiem_vu(interaction: discord.Interaction):
 
 # Autocomplete cho lam_nhiem_vu
 async def mission_autocomplete(interaction: discord.Interaction, current: str):
-    db = load_db()
-    uid = str(interaction.user.id)
-    
-    if uid not in db or not db[uid].get("missions"):
+    try:
+        db = load_db()
+        uid = str(interaction.user.id)
+        
+        if uid not in db: return []
+        u = db[uid]
+        missions = u.get("missions", [])
+        
+        if not missions: return []
+        
+        choices = []
+        for m in missions:
+            if not m.get("done") and (current.lower() in m['title'].lower() or current == ""):
+                label = f"[{m['id']}] {m['title']} ({m.get('difficulty', 'E')})"
+                choices.append(app_commands.Choice(name=label, value=m['id']))
+        
+        return choices[:25]
+    except Exception as e:
+        rainbow_log(f"⚠️ Autocomplete error: {e}")
         return []
-    
-    missions = db[uid]["missions"]
-    return [
-        app_commands.Choice(name=f"[{m['id']}] {m['title']} ({m['difficulty']}) - {m['exp_reward']} EXP", value=m['id'])
-        for m in missions if not m.get("done") and (current.lower() in m['title'].lower() or current == "")
-    ][:25]  # Discord giới hạn 25 choices
 
 @bot.tree.command(name="lam_nhiem_vu", description="Thực hiện sứ mệnh với tiến độ thực tế")
 @app_commands.autocomplete(mission_id=mission_autocomplete)
