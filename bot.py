@@ -530,10 +530,13 @@ def number_to_emoji(num):
     }
     return ''.join(emoji_map[d] for d in str(num))
 
-async def check_access(interaction: discord.Interaction):
+async def check_access(interaction: discord.Interaction, deferred: bool = False):
     db = load_db()
     if str(interaction.user.id) not in db:
-        await interaction.response.send_message("⛩️ Ngươi chưa ghi danh nhập môn! Hãy dùng `/start` để bắt đầu.", ephemeral=True)
+        if deferred:
+            await interaction.followup.send("⛩️ Ngươi chưa ghi danh nhập môn! Hãy dùng `/start` để bắt đầu.", ephemeral=True)
+        else:
+            await interaction.response.send_message("⛩️ Ngươi chưa ghi danh nhập môn! Hãy dùng `/start` để bắt đầu.", ephemeral=True)
         return False
     return True
 
@@ -661,7 +664,7 @@ def get_rank_info(layer: int):
 
 @bot.tree.command(name="daily", description="Nhận quà 7h sáng (Real-time countdown)")
 async def daily(interaction: discord.Interaction):
-    if not await check_access(interaction): return
+    if not await check_access(interaction, deferred=True): return
     db = load_db(); uid = str(interaction.user.id)
     now = datetime.now(VN_TZ)
     reset = now.replace(hour=7, minute=0, second=0, microsecond=0)
@@ -794,15 +797,13 @@ async def phat_truat(interaction: discord.Interaction, user: discord.Member, ly_
         await interaction.response.send_message(embed=embed)
     else:
         await interaction.response.send_message("⛩️ Đệ tử này chưa có trong danh sách thu nhận!", ephemeral=True)
-
 @bot.tree.command(name="info", description="Xem thông tin tu luyện hiện tại")
 async def info(interaction: discord.Interaction):
     await interaction.response.defer()
-    if not await check_access(interaction): return
+    if not await check_access(interaction, deferred=True): return
     db = load_db(); uid = str(interaction.user.id)
     user = db[uid]
 
-    
     # Lấy thông tin cảnh giới
     rank_name, rank_info = get_rank_info(user['layer'])
     
@@ -1088,13 +1089,12 @@ async def mission_autocomplete(interaction: discord.Interaction, current: str):
                 choices.append(app_commands.Choice(name=label, value=m['id']))
         
         return choices[:25]
+    except discord.errors.NotFound:
+        # Interaction expired, ignore silently
+        return []
     except Exception as e:
         rainbow_log(f"⚠️ Autocomplete error: {e}")
         return []
-
-@bot.tree.command(name="lam_nhiem_vu", description="Thực hiện sứ mệnh với tiến độ thực tế")
-@app_commands.autocomplete(mission_id=mission_autocomplete)
-async def lam_nhiem_vu(interaction: discord.Interaction, mission_id: int):
     # Gọi defer ngay lập tức
     await interaction.response.defer()
     
@@ -1266,3 +1266,4 @@ if __name__ == "__main__":
         bot.run(os.getenv("DISCORD_TOKEN"))
     except Exception as e:
         rainbow_log(f"❌ PHÁP TRẬN SỤP ĐỔ: {e}")
+
