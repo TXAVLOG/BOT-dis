@@ -1,0 +1,56 @@
+{
+    "1135945525678583940": {
+        "name": "N.Name",
+        "layer": 100,
+        "exp": 5854,
+        "goal": 30000000,
+        "last_mission_reset": 1766820601.104375,
+        "missions": [
+            {
+                "id": 1,
+                "title": "Tọa Thiền Luyện Khí",
+                "desc": "Tĩnh tâm vận chuyển linh khí 100 chu thiên",
+                "difficulty": "D",
+                "exp_reward": 150,
+                "time_required": 8
+            },
+            {
+                "id": 2,
+                "title": "Diệt Yêu Thú",
+                "desc": "Tiêu diệt 5 con Huyền Minh Hổ ở Vạn Yêu Sơn",
+                "difficulty": "C",
+                "exp_reward": 250,
+                "time_required": 12
+            },
+            {
+                "id": 3,
+                "title": "Hái Linh Dược",
+                "desc": "Thu thập 10 cây Linh Chi trong Huyền Thiên Lâm",
+                "difficulty": "E",
+                "exp_reward": 80,
+                "time_required": 6
+            },
+            {
+                "id": 4,
+                "title": "Luyện Đan Dược",
+                "desc": "Luyện chế 3 viên Trúc Cơ Đan cho tông môn",
+                "difficulty": "B",
+                "exp_reward": 350,
+                "time_required": 15
+            },
+            {
+                "id": 5,
+                "title": "Tham Ngộ Kiếm Đạo",
+                "desc": "Lĩnh ngộ Thiên Lam Kiếm Pháp tại Kiếm Các",
+                "difficulty": "A",
+                "exp_reward": 500,
+                "time_required": 20
+            }
+        ],
+        "missions_completed": 5,
+        "last_daily": 1767073648.73546,
+        "current_mission": null,
+        "daily_streak": 2,
+        "last_daily_date": "2025-12-30"
+    }
+}
