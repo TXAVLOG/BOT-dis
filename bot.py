@@ -909,16 +909,18 @@ Trả về JSON chứa danh sách 'missions' gồm: 'id' (1-5), 'title', 'desc',
 async def calculate_divine_limit(u):
     """AI tính toán mốc EXP thăng cấp dựa trên tầng và lịch sử nhiệm vụ"""
     layer = u['layer']
-    if layer == 1: return 100
+    if layer == 1: return 200 # Tăng từ 100 lên 200 cho tầng 1
     missions_done = u.get("missions_completed", 0)
     prompt = (f"Đệ tử {u['name']} tầng {layer}, đã hoàn thành {missions_done} nhiệm vụ. "
               f"Hãy tính mốc linh lực cần nén ép để đạt tầng tiếp theo. "
+              f"Hãy cho một mốc linh lực cao và thử thách (ví dụ: khoảng {layer * 1000} - {layer * 1500}). "
               f"Trả về JSON: {{\"goal\": int}}.")
     res = await ask_ancestor("Bạn là Thiên Đạo tính giới hạn tu vi.", prompt, json_mode=True)
     try:
-        return json.loads(res).get("goal", layer * 300)
+        # Fallback cao hơn một chút: layer * 1000
+        return json.loads(res).get("goal", layer * 1000)
     except:
-        return layer * 300
+        return layer * 1000
 
 # --- BOT CLASS ---
 class ThienLamSect(commands.Bot):
@@ -1523,8 +1525,8 @@ async def daily(interaction: discord.Interaction):
     
     # Kiểm tra đột phá
     leveled_up = False
-    while db[uid]["exp"] >= db[uid].get("goal", 100):
-        db[uid]["exp"] -= db[uid].get("goal", 100)
+    while db[uid]["exp"] >= db[uid].get("goal", 200):
+        db[uid]["exp"] -= db[uid].get("goal", 200)
         db[uid]["layer"] += 1
         db[uid]["goal"] = await calculate_divine_limit(db[uid])
         leveled_up = True
@@ -1563,7 +1565,7 @@ async def phat_truat(interaction: discord.Interaction, user: discord.Member, ly_
         old_layer = db[uid]["layer"]
         db[uid]["layer"] = 1
         db[uid]["exp"] = 0
-        db[uid]["goal"] = 100
+        db[uid]["goal"] = 200
         save_db(db)
         await update_member_rank(user, 1)
         
@@ -1585,7 +1587,7 @@ async def info(interaction: discord.Interaction):
     rank_name, rank_info = get_rank_info(user['layer'])
     
     # Tính progress
-    progress_percent = (user['exp'] / user.get('goal', 100)) * 100
+    progress_percent = (user['exp'] / user.get('goal', 200)) * 100
     progress_bar = get_progress_bar(progress_percent, 15)
     
     # Lấy emoji từ cache hoặc tạo mới
@@ -1610,7 +1612,7 @@ async def info(interaction: discord.Interaction):
     # Progress bar
     embed.add_field(
         name="✨ Tu Vi Tiến Độ",
-        value=f"{progress_bar}\n**{user['exp']}** / **{user.get('goal', 100)}** ({int(progress_percent)}%)",
+        value=f"{progress_bar}\n**{user['exp']}** / **{user.get('goal', 200)}** ({int(progress_percent)}%)",
         inline=False
     )
     
@@ -1666,7 +1668,7 @@ async def bxh(interaction: discord.Interaction):
         rank_name, rank_info = get_rank_info(user_data['layer'])
         medal = "🥇" if idx == 1 else "🥈" if idx == 2 else "🥉" if idx == 3 else f"**{idx}.**"
         desc += f"{medal} **{user_data['name']}**\n"
-        desc += f"└ {rank_info['emoji']} {rank_name} - Tầng {user_data['layer']} ({user_data['exp']}/{user_data.get('goal', 100)} EXP)\n\n"
+        desc += f"└ {rank_info['emoji']} {rank_name} - Tầng {user_data['layer']} ({user_data['exp']}/{user_data.get('goal', 200)} EXP)\n\n"
     
     # Thống kê tổng quan
     total_disciples = len(db)
@@ -1700,7 +1702,7 @@ async def start(interaction: discord.Interaction):
         "name": interaction.user.display_name, 
         "layer": 1, 
         "exp": 0, 
-        "goal": 100, 
+        "goal": 200, 
         "last_mission_reset": 0, 
         "missions": [], 
         "missions_completed": 0, 
@@ -2498,8 +2500,8 @@ async def mission_autocomplete(interaction: discord.Interaction, current: str):
         u["missions_completed"] = u.get("missions_completed", 0) + 1
         
         leveled_up = False
-        while u["exp"] >= u.get("goal", 100):
-            u["exp"] -= u.get("goal", 100)
+        while u["exp"] >= u.get("goal", 200):
+            u["exp"] -= u.get("goal", 200)
             u["layer"] += 1
             u["goal"] = await calculate_divine_limit(u)
             leveled_up = True
@@ -2603,8 +2605,8 @@ async def lam_nhiem_vu(interaction: discord.Interaction, mission_id: int):
         u["missions_completed"] = u.get("missions_completed", 0) + 1
         
         leveled_up = False
-        while u["exp"] >= u.get("goal", 100):
-            u["exp"] -= u.get("goal", 100)
+        while u["exp"] >= u.get("goal", 200):
+            u["exp"] -= u.get("goal", 200)
             u["layer"] += 1
             u["goal"] = await calculate_divine_limit(u)
             leveled_up = True
@@ -2682,20 +2684,40 @@ async def tu_luyen(interaction: discord.Interaction):
         ]
         res = {"exp": exp_gain, "story": random.choice(stories)}
 
-    u["exp"] += res['exp']
+    u_streak = u.get("daily_streak", 0)
+    last_daily = u.get("last_daily", 0)
+    
+    # Kiểm tra streak còn hiệu lực không (trong vòng 48h)
+    streak_valid = False
+    if last_daily > 0:
+        days_since = (datetime.now(VN_TZ).timestamp() - last_daily) / 86400
+        if days_since < 2:
+            streak_valid = True
+    
+    streak_bonus = u_streak * 300 if streak_valid else 0
+    total_exp = res['exp'] + streak_bonus
+
+    u["exp"] += total_exp
     leveled_up = False
-    while u["exp"] >= u.get("goal", 100):
-        u["exp"] -= u.get("goal", 100)
+    while u["exp"] >= u.get("goal", 200):
+        u["exp"] -= u.get("goal", 200)
         u["layer"] += 1
         u["goal"] = await calculate_divine_limit(u)
         leveled_up = True
     
     save_db(db)
-    rainbow_log(f"✅ {u['name']} tu luyện xong (+{res['exp']} EXP)", is_italic=True)
+    rainbow_log(f"✅ {u['name']} tu luyện xong (+{total_exp} EXP, Streak {u_streak})", is_italic=True)
     
-    embed_res = txa_embed("🧘 Kết Quả Tu Hành", f"**Tổ sư phán:** \"{res['story']}\"\n📈 Nhận: **{res['exp']} Linh lực**.", Color.gold() if leveled_up else Color.green())
+    res_text = f"**Tổ sư phán:** \"{res['story']}\"\n\n"
+    res_text += f"📈 **Linh lực nhận được:**\n"
+    res_text += f"  • Cơ bản: `+{res['exp']} EXP`\n"
+    if streak_bonus > 0:
+        res_text += f"  • Streak bonus: `+{streak_bonus} EXP` (Ngày {u_streak})\n"
+    res_text += f"  • **Tổng cộng: `+{total_exp} EXP`**"
+
+    embed_res = txa_embed("🧘 Kết Quả Tu Hành", res_text, Color.gold() if leveled_up else Color.green())
     if leveled_up: 
-        embed_res.add_field(name="🔥 ĐỘT PHÁ!", value=f"Tầng {u['layer']}!")
+        embed_res.add_field(name="🔥 ĐỘT PHÁ!", value=f"Chúc mừng đệ tử đạt tới **Tầng {u['layer']}**!")
         await update_member_rank(interaction.user, u['layer'])
         rainbow_log(f"🔥 {u['name']} ĐỘT PHÁ lên Tầng {u['layer']}!", is_italic=True)
     await msg.edit(embed=embed_res)

@@ -4,7 +4,6 @@ Sercurity/.env
 Sercurity/env
 
 # Database files
-*.json
 !requirements.json
 
 # Cache
