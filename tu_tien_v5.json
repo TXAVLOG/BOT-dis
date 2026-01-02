@@ -2,17 +2,17 @@
     "1135945525678583940": {
         "name": "N.Name",
         "layer": 100,
-        "exp": 6954,
+        "exp": 7194,
         "goal": 30000000,
-        "last_mission_reset": 1766820601.104375,
+        "last_mission_reset": 1767245878.064772,
         "missions": [
             {
                 "id": 1,
-                "title": "Tọa Thiền Luyện Khí",
-                "desc": "Tĩnh tâm vận chuyển linh khí 100 chu thiên",
-                "difficulty": "D",
-                "exp_reward": 150,
-                "time_required": 8
+                "title": "Hái Linh Dược",
+                "desc": "Thu thập 10 cây Linh Chi trong Huyền Thiên Lâm",
+                "difficulty": "E",
+                "exp_reward": 80,
+                "time_required": 6
             },
             {
                 "id": 2,
@@ -24,19 +24,19 @@
             },
             {
                 "id": 3,
-                "title": "Hái Linh Dược",
-                "desc": "Thu thập 10 cây Linh Chi trong Huyền Thiên Lâm",
-                "difficulty": "E",
-                "exp_reward": 80,
-                "time_required": 6
-            },
-            {
-                "id": 4,
                 "title": "Luyện Đan Dược",
                 "desc": "Luyện chế 3 viên Trúc Cơ Đan cho tông môn",
                 "difficulty": "B",
                 "exp_reward": 350,
                 "time_required": 15
+            },
+            {
+                "id": 4,
+                "title": "Tọa Thiền Luyện Khí",
+                "desc": "Tĩnh tâm vận chuyển linh khí 100 chu thiên",
+                "difficulty": "D",
+                "exp_reward": 150,
+                "time_required": 8
             },
             {
                 "id": 5,
@@ -55,15 +55,15 @@
     },
     "1307619198591307801": {
         "name": "[Phàm Nhân] anhyeu23",
-        "layer": 3,
-        "exp": 449,
-        "goal": 900,
+        "layer": 4,
+        "exp": 805,
+        "goal": 1200,
         "last_mission_reset": 0,
         "missions": [],
         "missions_completed": 0,
-        "last_daily": 1767201607.409401,
+        "last_daily": 1767355737.154058,
         "current_mission": null,
-        "daily_streak": 1,
-        "last_daily_date": "2026-01-01"
+        "daily_streak": 2,
+        "last_daily_date": "2026-01-02"
     }
 }
