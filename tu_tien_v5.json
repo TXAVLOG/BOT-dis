@@ -2,7 +2,7 @@
     "1135945525678583940": {
         "name": "N.Name",
         "layer": 100,
-        "exp": 8294,
+        "exp": 11394,
         "goal": 30000000,
         "last_mission_reset": 1767245878.064772,
         "missions": [
@@ -48,10 +48,10 @@
             }
         ],
         "missions_completed": 5,
-        "last_daily": null,
+        "last_daily": 1767582779.540354,
         "current_mission": null,
         "daily_streak": 10,
-        "last_daily_date": ""
+        "last_daily_date": "2026-01-05"
     },
     "1307619198591307801": {
         "name": "[Phàm Nhân] anhyeu23",
