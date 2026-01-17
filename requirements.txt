@@ -7,3 +7,4 @@ aiohttp
 yt-dlp
 PyNaCl
 gTTS
+aiosqlite
