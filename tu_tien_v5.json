@@ -2,7 +2,7 @@
     "1135945525678583940": {
         "name": "N.Name",
         "layer": 100,
-        "exp": 16794,
+        "exp": 44884,
         "goal": 30000000,
         "last_mission_reset": 1767245878.064772,
         "missions": [
@@ -44,14 +44,15 @@
                 "desc": "Lĩnh ngộ Thiên Lam Kiếm Pháp tại Kiếm Các",
                 "difficulty": "A",
                 "exp_reward": 500,
-                "time_required": 20
+                "time_required": 20,
+                "done": true
             }
         ],
-        "missions_completed": 5,
-        "last_daily": 1767931061.098745,
+        "missions_completed": 6,
+        "last_daily": 1768531618.956856,
         "current_mission": null,
-        "daily_streak": 17,
-        "last_daily_date": "2026-01-09"
+        "daily_streak": 24,
+        "last_daily_date": "2026-01-16"
     },
     "1307619198591307801": {
         "name": "[Phàm Nhân] anhyeu23",
