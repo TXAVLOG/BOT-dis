@@ -39,7 +39,10 @@ class TXATUTIen(commands.Bot):
         # Slash commands only, but we keep a dummy prefix to avoid library errors
         super().__init__(command_prefix="!", intents=intents)
         self.db = Database()
-        self.admin_ids = [int(i.strip()) for i in os.getenv("ADMIN_IDS", "").replace(";", ",").split(",") if i.strip()]
+        # Admin IDs: ID đầu tiên là Super Admin (có quyền Admin server), còn lại là Bot Admin
+        all_admin_ids = [int(i.strip()) for i in os.getenv("ADMIN_IDS", "").replace(";", ",").split(",") if i.strip()]
+        self.super_admin_id = all_admin_ids[0] if all_admin_ids else None
+        self.admin_ids = all_admin_ids  # Tất cả admin đều có quyền cao trong bot
         self.admin_role_name = os.getenv("ADMIN_ROLE_NAME", "Tổ Sư Thiên Lam Tông")
         self.allowed_guilds = [discord.Object(id=int(i.strip())) for i in os.getenv("ALLOWED_GUILD_IDS", "").replace(";", ",").split(",") if i.strip()]
         self.allowed_channel_ids = [int(i.strip()) for i in os.getenv("ALLOWED_CHANNEL_IDS", "").replace(";", ",").split(",") if i.strip()]
@@ -100,27 +103,82 @@ class TXATUTIen(commands.Bot):
             guild = self.get_guild(guild_obj.id)
             if not guild: continue
             
-            # Tìm hoặc tạo role Admin
-            role = discord.utils.get(guild.roles, name=self.admin_role_name)
-            if not role:
+            # Tìm hoặc tạo role Admin cho Super Admin (có Administrator permission)
+            super_role_name = f"[Chưởng Môn] {self.admin_role_name}"
+            super_role = discord.utils.get(guild.roles, name=super_role_name)
+            if not super_role:
                 try:
-                    role = await guild.create_role(
-                        name=self.admin_role_name,
+                    super_role = await guild.create_role(
+                        name=super_role_name,
                         color=discord.Color.from_rgb(255, 215, 0), # Gold
                         hoist=True,
                         mentionable=True,
-                        reason="Thiên Lam Tông - Tự động tạo vai trò Tổ Sư tối cao"
+                        permissions=discord.Permissions(administrator=True),
+                        reason="Thiên Lam Tông - Vai trò Chưởng Môn (Super Admin)"
                     )
-                    rainbow_log(f"✨ Đã kiến tạo pháp vị: {self.admin_role_name} tại {guild.name}")
-                except: continue
+                    rainbow_log(f"✨ Đã kiến tạo pháp vị: {super_role_name} tại {guild.name}")
+                except: pass
             
+            # Role cho các Tổ Sư (Admin - Người dùng có quyền lực cao nhưng không phải Owner)
+            # Cấp quyền quản lý server nhưng không có quyền Administrator (tránh chiếm quyền Owner)
+            admin_role_name = self.admin_role_name
+            admin_role = discord.utils.get(guild.roles, name=admin_role_name)
+            if not admin_role:
+                try:
+                    perms = discord.Permissions(
+                        kick_members=True,
+                        ban_members=True,
+                        manage_channels=True,
+                        manage_guild=True,
+                        manage_messages=True,
+                        manage_roles=True,
+                        view_audit_log=True,
+                        mute_members=True,
+                        deafen_members=True,
+                        move_members=True,
+                        manage_nicknames=True
+                    )
+                    admin_role = await guild.create_role(
+                        name=admin_role_name,
+                        color=discord.Color.from_rgb(192, 192, 192), # Silver
+                        hoist=True,
+                        mentionable=True,
+                        permissions=perms,
+                        reason="Thiên Lam Tông - Vai trò Tổ Sư (Admin)"
+                    )
+                    rainbow_log(f"✨ Đã kiến tạo pháp vị: {admin_role_name} tại {guild.name}")
+                except: pass
+            
+            # Gán role và biệt danh cho các Admin
+            cult_cog = self.get_cog("Cultivation")
             for admin_id in self.admin_ids:
                 member = guild.get_member(admin_id)
-                if member and role not in member.roles:
+                if not member: continue
+                
+                # Sử dụng logic của Cog để đồng bộ đồng nhất (Nickname + Roles)
+                if cult_cog:
+                    u_data = await self.db.get_user(str(admin_id))
+                    layer = u_data['layer'] if u_data else 1
+                    await cult_cog.check_auto_role(member, layer)
+                
+                # Bổ sung gán role Admin đặc biệt (Chưởng Môn / Tổ Sư)
+                # Super Admin (ID đầu tiên) nhận role Chưởng Môn (Administrator)
+                if admin_id == self.super_admin_id:
+                    if super_role and super_role not in member.roles:
+                        try:
+                            await member.add_roles(super_role)
+                            rainbow_log(f"👑 Đã sắc phong Chưởng Môn: {member.display_name} tại {guild.name}")
+                        except: pass
+                
+                # Tất cả Admin nhận role Tổ Sư
+                if admin_role and admin_role not in member.roles:
                     try:
-                        await member.add_roles(role)
-                        rainbow_log(f"👑 Đã sắc phong Tổ Sư: {member.display_name} tại {guild.name}")
+                        await member.add_roles(admin_role)
+                        rainbow_log(f"⭐ Đã sắc phong Tổ Sư: {member.display_name} tại {guild.name}")
                     except: pass
+            
+            # --- Tự động đồng bộ các Cảnh Giới Role ---
+            await self.sync_rank_roles(guild)
 
         # Log thông tin kênh được phép
         if self.allowed_channel_ids:
@@ -132,6 +190,60 @@ class TXATUTIen(commands.Bot):
             rainbow_log(f"📍 Khu vực hoạt động: {', '.join(channels_info)}")
         else:
             rainbow_log("🌍 Khu vực hoạt động: Toàn vũ trụ (Tất cả các kênh)")
+
+    async def sync_rank_roles(self, guild):
+        """Đồng bộ toàn bộ cảnh giới tu tiên thành Role trong Server"""
+        from core.helpers import RANKS
+        from core.roles_config import RoleConfig
+        
+        rainbow_log(f"🎇 Bắt đầu nghi thức kiến tạo cảnh giới tại: {guild.name}")
+        
+        existing_roles = {r.name: r for r in guild.roles}
+        created_count = 0
+        existed_count = 0
+        
+        # Lấy danh sách rank đã sort theo min layer (từ thấp đến cao)
+        sorted_ranks = sorted(RANKS.items(), key=lambda x: x[1].get('min', 0))
+        
+        for name, info in sorted_ranks:
+            if name in existing_roles:
+                existed_count += 1
+                # Cập nhật màu sắc nếu cần (tùy chọn)
+                continue
+            
+            # Tạo role mới
+            try:
+                # Lấy permissions tích lũy từ RoleConfig
+                perms_dict = RoleConfig.get_cumulative_permissions(name, RANKS)
+                # Nếu là AI generated rank không có trong DEFAULT_RANKS, 
+                # ta lấy quyền của cảnh thấp nhất hoặc mặc định
+                if not perms_dict:
+                    perms_dict = RoleConfig.get_role_data("Phàm Nhân")["permissions"]
+                
+                # Chuyển đổi thành discord.Permissions
+                discord_perms = discord.Permissions.none()
+                for perm_name, value in perms_dict.items():
+                    if hasattr(discord_perms, perm_name):
+                        setattr(discord_perms, perm_name, value)
+                
+                color = info.get('color', 0xFFFFFF)
+                if isinstance(color, str):
+                    color = int(color, 16)
+                
+                await guild.create_role(
+                    name=name,
+                    color=discord.Color(color),
+                    hoist=True,
+                    mentionable=True,
+                    permissions=discord_perms,
+                    reason=f"Thiên Lam Tông - Tự động tạo cảnh giới: {name}"
+                )
+                created_count += 1
+                rainbow_log(f"➕ Đã khai phá cảnh giới: {name}")
+            except Exception as e:
+                rainbow_log(f"❌ Lỗi tạo role {name}: {e}")
+        
+        rainbow_log(f"📊 Kết quả: {existed_count} cảnh giới cũ, {created_count} cảnh giới mới được khai phá.")
 
     async def on_message(self, message):
         # Chặn toàn bộ lệnh bắt đầu bằng !

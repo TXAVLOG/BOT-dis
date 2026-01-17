@@ -60,7 +60,7 @@ class TXAFormat:
         m, s = divmod(int(seconds), 60)
         if m > 0:
             return f"{TXAFormat.pad2(m)} phút {TXAFormat.pad2(s)} giây"
-        return f"còn {TXAFormat.pad2(s)} giây"
+        return f"{TXAFormat.pad2(s)} giây"
     
     @staticmethod
     def date(dt: datetime = None) -> str:

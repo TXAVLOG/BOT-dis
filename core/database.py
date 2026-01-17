@@ -28,15 +28,22 @@ class Database:
                     inventory TEXT DEFAULT '[]',
                     missions TEXT DEFAULT '[]',
                     current_mission TEXT DEFAULT NULL,
-                    sect_id INTEGER DEFAULT NULL
+                    sect_id INTEGER DEFAULT NULL,
+                    daily_exp INTEGER DEFAULT 0,
+                    last_daily_exp_reset REAL DEFAULT 0
                 )
             """)
             
             # Migration check: Add sect_id if not exists
             try:
                 await db.execute("ALTER TABLE users ADD COLUMN sect_id INTEGER DEFAULT NULL")
-            except:
-                pass
+            except: pass
+            
+            # Migration check: Add daily_exp stats
+            try:
+                await db.execute("ALTER TABLE users ADD COLUMN daily_exp INTEGER DEFAULT 0")
+                await db.execute("ALTER TABLE users ADD COLUMN last_daily_exp_reset REAL DEFAULT 0")
+            except: pass
 
             # Table for sects (New Feature - Cleaned)
             await db.execute("""
@@ -110,8 +117,15 @@ class Database:
                 return [dict(row) for row in rows]
 
     async def get_all_sects(self):
+        """Lấy danh sách tất cả tông môn"""
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
-            async with db.execute("SELECT * FROM sects") as cursor:
+            async with db.execute("SELECT * FROM sects ORDER BY exp DESC") as cursor:
                 rows = await cursor.fetchall()
                 return [dict(row) for row in rows]
+
+    async def update_sect_exp(self, sect_id: int, exp: int):
+        """Cộng thêm EXP cho tông môn"""
+        async with self.aiosqlite.connect(self.db_path) as db:
+            await db.execute("UPDATE sects SET exp = exp + ? WHERE sect_id = ?", (exp, sect_id))
+            await db.commit()

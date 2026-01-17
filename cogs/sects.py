@@ -152,8 +152,8 @@ class Sects(commands.Cog):
                 sect_id = cursor.lastrowid
                 await db.commit()
             
-            # Cập nhật sect_id cho tông chủ
-            await self.db.update_user(uid, sect_id=sect_id)
+            # Cập nhật sect_id cho tông chủ và reset nhiệm vụ để nhận công khóa tông môn
+            await self.db.update_user(uid, sect_id=sect_id, missions=[])
 
             embed = txa_embed(
                 "🎊 Khai Tông Lập Phái!",
@@ -210,8 +210,8 @@ class Sects(commands.Cog):
                 if not row: return await interaction.followup.send("❌ Tông môn hư ảo, không tồn tại.")
                 sect = dict(row)
             
-            # Update user's sect_id
-            await self.db.update_user(uid, sect_id=sect['sect_id'])
+            # Update user's sect_id and reset missions
+            await self.db.update_user(uid, sect_id=sect['sect_id'], missions=[])
             
         await interaction.followup.send(embed=txa_embed("✅ Bái Sư Thành Công", f"Chúc mừng đạo hữu gia nhập **{name}**!\nHãy cống hiến hết mình cho tông môn!", discord.Color.green()))
         asyncio.create_task(self.update_sect_list_displays())

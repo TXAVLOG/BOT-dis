@@ -23,9 +23,10 @@ Thumbs.db
 
 # Logs
 *.log
-
+*.txt
 # Python
 *.egg-info/
 dist/
 build/
+scripts/
 *.bak

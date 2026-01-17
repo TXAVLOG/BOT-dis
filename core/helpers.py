@@ -18,25 +18,7 @@ ITALIC = "\033[3m"
 RESET = Style.RESET_ALL
 EMOJI_CACHE_FILE = "cache/emoji_cache.json"
 
-# --- RANKS (Fallback / Default) ---
-DEFAULT_RANKS = {
-    "Phàm Nhân": {"min": 1, "max": 9, "color": 0x808080, "emoji": "🌱"},
-    "Luyện Khí": {"min": 10, "max": 19, "color": 0x00FF00, "emoji": "💨"},
-    "Trúc Cơ": {"min": 20, "max": 29, "color": 0x00FFFF, "emoji": "🔷"},
-    "Kim Đan": {"min": 30, "max": 39, "color": 0xFFD700, "emoji": "💊"},
-    "Nguyên Anh": {"min": 40, "max": 49, "color": 0xFF00FF, "emoji": "👶"},
-    "Hóa Thần": {"min": 50, "max": 69, "color": 0xFF0000, "emoji": "🔥"},
-    "Luyện Hư": {"min": 70, "max": 89, "color": 0x9400D3, "emoji": "🌌"},
-    "Hợp Thể": {"min": 90, "max": 109, "color": 0xFF1493, "emoji": "⚡"},
-    "Đại Thừa": {"min": 110, "max": 149, "color": 0xFFFFFF, "emoji": "✨"},
-    "Độ Kiếp": {"min": 150, "max": 199, "color": 0x8B0000, "emoji": "⚔️"},
-    "Chân Tiên": {"min": 200, "max": 299, "color": 0x00CED1, "emoji": "🌟"},
-    "Huyền Tiên": {"min": 300, "max": 499, "color": 0x4169E1, "emoji": "💫"},
-    "Kim Tiên": {"min": 500, "max": 999, "color": 0xFFD700, "emoji": "👑"},
-    "Đại La Kim Tiên": {"min": 1000, "max": 9999, "color": 0xFF4500, "emoji": "🔱"},
-    "Chuẩn Thánh": {"min": 10000, "max": 99999, "color": 0xF0E68C, "emoji": "🌞"},
-    "Thánh Nhân": {"min": 100000, "max": 999999, "color": 0xFFFFFF, "emoji": "☀️"},
-}
+from core.roles_config import DEFAULT_RANKS
 
 # Active RANKS (sẽ được AI generate hoặc fallback)
 RANKS = DEFAULT_RANKS.copy()
@@ -155,21 +137,32 @@ async def generate_ranks_from_ai():
             ranks_list = data.get('ranks', [])
             
             if ranks_list and len(ranks_list) >= 10:
-                new_ranks = {}
+                # Nếu AI thành công, ta xóa sạch RANKS cũ để dùng hoàn toàn set mới
+                RANKS.clear()
                 for r in ranks_list:
                     name = r.get('name', 'Vô Danh')
                     color_str = r.get('color', '0x808080')
                     color = int(color_str, 16) if isinstance(color_str, str) else color_str
-                    new_ranks[name] = {
-                        "min": r.get('min', 1),
+                    
+                    min_layer = r.get('min', 1)
+                    # Tìm permissions từ DEFAULT_RANKS gần nhất (không vượt quá min_layer)
+                    closest_perms = {}
+                    best_match_min = -1
+                    for d_name, d_info in DEFAULT_RANKS.items():
+                        if d_info['min'] <= min_layer and d_info['min'] > best_match_min:
+                            closest_perms = d_info.get('permissions', {})
+                            best_match_min = d_info['min']
+
+                    RANKS[name] = {
+                        "min": min_layer,
                         "max": r.get('max', 9),
                         "color": color,
-                        "emoji": r.get('emoji', '⭐')
+                        "emoji": r.get('emoji', '⭐'),
+                        "permissions": closest_perms # Kế thừa quyền từ set mặc định
                     }
                 
-                RANKS.update(new_ranks)
-                save_ranks_cache(new_ranks)
-                rainbow_log(f"✅ [Đạo Pháp] AI đã tạo thành công {len(new_ranks)} cảnh giới tu tiên!")
+                save_ranks_cache(RANKS)
+                rainbow_log(f"✅ [Đạo Pháp] AI đã tạo thành công {len(RANKS)} cảnh giới tu tiên!")
                 return RANKS
                 
     except Exception as e:
