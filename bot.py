@@ -14,7 +14,7 @@ from core.migrate import migrate_data
 import random
 
 # --- PHIÊN BẢN MỚI ---
-VERSION = "v9.0.0 - Thiên Đạo SQLite"
+VERSION = "v10.0.0 - Thiên Đạo SQLite & AI Narrative"
 
 ASCII_TXA = rf"""
 ╔══════════════════════════════════════════════════════════════════════╗
@@ -27,8 +27,8 @@ ASCII_TXA = rf"""
 ║     ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝    ╚═╝     ╚═╝  ╚═╝ ╚═════╝               ║
 ║                                                                      ║
 ║══════════════════════════════════════════════════════════════════════║
-║  ⛩️   THIÊN LAM TÔNG - LUYỆN KHÍ MƯỜI VẠN NĂM (UPGRADED)             ║
-║  ⚡  Hệ Thống Đã Được Nâng Cấp Lên SQLite & Cogs                    ║
+║  ⛩️   THIÊN LAM TÔNG - LUYỆN KHÍ MƯỜI VẠN NĂM (UPGRADED)            ║
+║  ⚡  Hệ Thống Đã Được Nâng Cấp Lên SQLite & Cogs                     ║
 ║  Phiên bản: {VERSION:<49}                                            ║
 ╚══════════════════════════════════════════════════════════════════════╝
 """

@@ -2,6 +2,7 @@
 class CultivationData:
     """Dữ liệu nhiệm vụ và tài nguyên cốt truyện Luyện Khí Mười Vạn Năm"""
     
+    # --- MISSIONS ---
     MISSIONS = [
         "Quét dọn lá rụng tại Thiên Lam Phong",
         "Chăm sóc vườn linh dược của đệ tử ngoại môn",
@@ -53,6 +54,56 @@ class CultivationData:
         "Hỗ trợ đệ tử bị thương tại Dược Đường",
         "Tìm kiếm quặng sắt tinh tại khe núi",
         "Đối thơ với sư huynh văn hay chữ tốt"
+    ]
+
+    # --- SHOP ITEMS ---
+    ITEMS = {
+        "ruou_ngon": {"name": "Rượu Tiên Thiên Lam", "price": 500, "desc": "Rượu ngon tăng 1000 EXP. Hạn dùng: 1 giờ.", "effect": {"exp": 1000}, "emoji": "🍶", "duration": 3600},
+        "dan_truc_co": {"name": "Trúc Cơ Đan", "price": 2000, "desc": "Đan dược tăng 5000 EXP. Hạn dùng: 2 giờ.", "effect": {"exp": 5000}, "emoji": "💊", "duration": 7200},
+        "linh_thach_tiny": {"name": "Linh Thạch Vụn", "price": 100, "desc": "Tăng 200 EXP. Hạn dùng: 30 phút.", "effect": {"exp": 200}, "emoji": "💎", "duration": 1800},
+        "tu_tieu_hac": {"name": "Linh Thú Tiểu Hắc", "price": 50000, "desc": "Tăng 20% tỉ lệ thành công nhiệm vụ. Hạn dùng: 5 phút.", "effect": {"mission_buff": 20}, "emoji": "🦅", "duration": 300},
+        "kiem_ri_set": {"name": "Kiếm Rỉ Sét", "price": 100000, "desc": "Tăng x2 sát thương khi đấu pháp. Hạn dùng: 10 phút.", "effect": {"combat_buff": 1.0}, "emoji": "🗡️", "duration": 600},
+    }
+
+    # --- KUNG FU (CÔNG PHÁP) ---
+    KUNG_FU = {
+        "thien_lam_tam_phap": {
+            "name": "Thiên Lam Tâm Pháp", 
+            "desc": "Công pháp trấn phái Thiên Lam Tông, tăng 20% EXP khi tu luyện.", 
+            "buff": {"exp_mult": 1.2}, 
+            "price": 0, # Mặc định có sẵn cho Thiên Lam Tông
+            "emoji": "🧘"
+        },
+        "cuu_u_kiem_phap": {
+            "name": "Cửu U Kiếm Pháp", 
+            "desc": "U minh kiếm ý, tăng 30% sát thương Đấu Pháp.", 
+            "buff": {"dmg_mult": 1.3}, 
+            "price": 10000,
+            "emoji": "⚔️"
+        },
+        "van_tuong_quy_nguyen": {
+            "name": "Vạn Tượng Quy Nguyên", 
+            "desc": "Thu nạp vạn vật, tăng 50% Linh Thạch kiếm được.", 
+            "buff": {"stone_mult": 1.5}, 
+            "price": 20000,
+            "emoji": "🌀"
+        },
+        "bat_bien_kiem_the": {
+            "name": "Bất Biến Kiếm Thế", 
+            "desc": "Thủ như bàn thạch, giảm 20% sát thương nhận vào.", 
+            "buff": {"def_mult": 0.8}, 
+            "price": 15000,
+            "emoji": "🛡️"
+        }
+    }
+
+    # --- COMBAT FALLBACKS ---
+    COMBAT_NARRATIVES = [
+        "{a} tung một chưởng lực mãnh liệt, khí thế như rồng bay phượng múa hướng về {b}!",
+        "{a} sử dụng ngự kiếm thuật, thanh kiếm hóa thành vệt sáng xé toạc không gian tấn công {b}!",
+        "{a} vận chuyển linh lực toàn thân, tạo ra một cơn lốc xoáy quanh {b}!",
+        "{a} xuất hiện chớp nhoáng sau lưng {b}, tung một đòn đánh hiểm hóc!",
+        "{a} niệm chú, hàng loạt băng tiễn lao vút về phía {b}!"
     ]
 
     @staticmethod

@@ -86,6 +86,29 @@ class Admin(commands.Cog):
         )
         await interaction.followup.send(embed=embed)
 
+    @app_commands.command(name="admin_grant_stones", description="[Lão Tổ] Ban Thưởng Linh Thạch - Khai mở ngân khố")
+    @app_commands.describe(user="Đệ tử được ban thưởng", amount="Lượng linh thạch (💎)")
+    async def admin_grant_stones(self, interaction: discord.Interaction, user: discord.User, amount: int):
+        if interaction.user.id not in self.bot.admin_ids:
+            return await interaction.response.send_message("🚫 **To gan!** Ngân khố của Tông Môn há phải chỗ ngươi tự tiện ra vào?", ephemeral=True)
+            
+        await interaction.response.defer(ephemeral=True)
+        uid = str(user.id)
+        current_data = await self.db.get_user(uid)
+        
+        if not current_data:
+            return await interaction.followup.send("⚠️ Kẻ này chưa ghi danh tu luyện.")
+
+        new_stones = current_data['spirit_stones'] + amount
+        await self.db.update_user(uid, spirit_stones=new_stones)
+        
+        embed = txa_embed(
+            "💎 Khai Mở Thiên Kho",
+            f"Lão Tổ đã đặc cách ban thưởng cho {user.mention} **{amount:,} Linh Thạch** từ ngân khố tông môn!\n\n*\"Công lao của ngươi Tông Môn đã ghi nhận, hãy sử dụng linh thạch này cho đúng đạo!\"*",
+            discord.Color.gold()
+        )
+        await interaction.followup.send(embed=embed)
+
     @app_commands.command(name="admin_punish", description="[Lão Tổ] Thiên Phạt - Trừng phạt đệ tử ngỗ nghịch")
     @app_commands.describe(user="Đệ tử bị phạt", reason="Lý do trừng phạt")
     async def admin_punish(self, interaction: discord.Interaction, user: discord.User, reason: str):

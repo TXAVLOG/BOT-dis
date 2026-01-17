@@ -3,8 +3,9 @@ import asyncio
 import random
 from discord import app_commands
 from discord.ext import commands
-from core.helpers import txa_embed
+from core.helpers import txa_embed, rainbow_log
 from core.database import Database
+from core.game_data import CultivationData
 import json
 
 class Sects(commands.Cog):
@@ -122,7 +123,11 @@ class Sects(commands.Cog):
     async def sect_create(self, interaction: discord.Interaction, name: str):
         await interaction.response.defer(ephemeral=True)
         uid = str(interaction.user.id)
-        
+        user = await self.db.get_user(uid)
+        if not user:
+            embed = txa_embed("⛩️ Thiên Lam Cấm Chế", "Ngươi chưa ghi danh! Hãy dùng `/start` để có tư cách sáng lập tông môn.", discord.Color.red())
+            return await interaction.followup.send(embed=embed, ephemeral=True)
+            
         # Check if user is admin
         is_admin = int(uid) in self.bot.admin_ids
         
@@ -160,6 +165,7 @@ class Sects(commands.Cog):
                 f"Tông môn **{name}** đã chính thức hiện diện tại Thiên Lam Giới!\n**Tông Chủ:** {interaction.user.mention}",
                 discord.Color.gold()
             )
+            rainbow_log(f"⛩️ [Sect] {interaction.user.name} đã sáng lập tông môn: {name} (ID: {sect_id})")
             await interaction.followup.send(embed=embed, ephemeral=True)
             asyncio.create_task(self.update_sect_list_displays())
         except Exception as e:
@@ -174,6 +180,10 @@ class Sects(commands.Cog):
     async def sect_info(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         uid = str(interaction.user.id)
+        user = await self.db.get_user(uid)
+        if not user:
+            embed = txa_embed("⛩️ Thiên Lam Cấm Chế", "Ngươi chưa ghi danh! Hãy dùng `/start` để nhập môn.", discord.Color.red())
+            return await interaction.followup.send(embed=embed, ephemeral=True)
         
         sect = await self.check_user_sect(uid)
         if not sect: 
@@ -186,10 +196,15 @@ class Sects(commands.Cog):
                 count_row = await count_cursor.fetchone()
                 member_count = count_row[0] if count_row else 0
 
-        embed = txa_embed(f"⛩️ Tông Môn: {sect['name']}", sect.get('description', "Dấu tích cổ xưa được ghi chép trong sử sách."), discord.Color.gold())
+        embed = txa_embed(f"⛩️ Tông Môn: {sect['name']}", sect.get('description', "Dấu tích cổ xưa."), discord.Color.gold())
         embed.add_field(name="👑 Tông Chủ", value=f"<@{sect['leader_id']}>", inline=True)
         embed.add_field(name="📈 Quy Mô", value=f"Cấp {sect['level']} • {member_count} đệ tử", inline=True)
         embed.add_field(name="✨ Linh Mạch", value=f"{sect['exp']} EXP", inline=True)
+        
+        kf_list = sect.get('kung_fu', [])
+        kf_text = "\n".join([f"📜 **{CultivationData.KUNG_FU[k]['name']}**" for k in kf_list if k in CultivationData.KUNG_FU]) or "Chưa có"
+        embed.add_field(name="📚 Tàng Kinh Các", value=kf_text, inline=False)
+        
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(name="sect_join", description="Bái sư nhập môn")
@@ -197,6 +212,10 @@ class Sects(commands.Cog):
     async def sect_join(self, interaction: discord.Interaction, name: str):
         await interaction.response.defer(ephemeral=True)
         uid = str(interaction.user.id)
+        user = await self.db.get_user(uid)
+        if not user:
+            embed = txa_embed("⛩️ Thiên Lam Cấm Chế", "Ngươi chưa ghi danh! Hãy dùng `/start` để có tư cách bái sư.", discord.Color.red())
+            return await interaction.followup.send(embed=embed, ephemeral=True)
         
         # Check if already in sect
         existing_sect = await self.check_user_sect(uid)
@@ -214,6 +233,7 @@ class Sects(commands.Cog):
             await self.db.update_user(uid, sect_id=sect['sect_id'], missions=[])
             
         await interaction.followup.send(embed=txa_embed("✅ Bái Sư Thành Công", f"Chúc mừng đạo hữu gia nhập **{name}**!\nHãy cống hiến hết mình cho tông môn!", discord.Color.green()))
+        rainbow_log(f"🤝 [Sect] {interaction.user.name} gia nhập tông môn: {name}")
         asyncio.create_task(self.update_sect_list_displays())
 
     @app_commands.command(name="sect_transfer", description="Truyền ngôi Tông Chủ cho đệ tử khác")
@@ -222,6 +242,10 @@ class Sects(commands.Cog):
     async def sect_transfer(self, interaction: discord.Interaction, member_id: str):
         await interaction.response.defer(ephemeral=True)
         uid = str(interaction.user.id)
+        user = await self.db.get_user(uid)
+        if not user:
+            embed = txa_embed("⛩️ Thiên Lam Cấm Chế", "Ngươi chưa ghi danh! Làm sao có thể truyền vị?", discord.Color.red())
+            return await interaction.followup.send(embed=embed, ephemeral=True)
         
         sect = await self.check_user_sect(uid)
         if not sect:
@@ -247,6 +271,7 @@ class Sects(commands.Cog):
             await db.commit()
             
         await interaction.followup.send(embed=txa_embed("👑 Truyền Ngôi", f"Ngai vị Tông Chủ của **{sect['name']}** đã được truyền lại cho <@{member_id}>!", discord.Color.gold()))
+        rainbow_log(f"👑 [Sect] {interaction.user.name} truyền ngôi tông chủ {sect['name']} cho {member_id}")
         asyncio.create_task(self.update_sect_list_displays())
         
         # DM Notice
@@ -259,6 +284,10 @@ class Sects(commands.Cog):
     async def sect_leave(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         uid = str(interaction.user.id)
+        user = await self.db.get_user(uid)
+        if not user:
+            embed = txa_embed("⛩️ Thiên Lam Cấm Chế", "Ngươi chưa ghi danh! Hãy dùng `/start` để nhập môn.", discord.Color.red())
+            return await interaction.followup.send(embed=embed, ephemeral=True)
         
         sect = await self.check_user_sect(uid)
         if not sect:
@@ -307,6 +336,46 @@ class Sects(commands.Cog):
             await interaction.followup.send(embed=txa_embed("👋 Phản Xuất Tông Môn", f"Ngươi đã rời khỏi **{sect['name']}**. Từ nay đường ai nấy đi!", discord.Color.orange()))
 
         asyncio.create_task(self.update_sect_list_displays())
+
+    @app_commands.command(name="sect_kungfu", description="Tàng Kinh Các - Nghiên cứu công pháp (Chỉ Tông Chủ)")
+    async def sect_kungfu(self, interaction: discord.Interaction):
+        uid = str(interaction.user.id)
+        user = await self.db.get_user(uid)
+        if not user:
+            embed = txa_embed("⛩️ Thiên Lam Cấm Chế", "Ngươi chưa ghi danh! Hãy dùng `/start` để nhập môn.", discord.Color.red())
+            return await interaction.response.send_message(embed=embed, ephemeral=True)
+            
+        sect = await self.check_user_sect(uid)
+        if not sect: return await interaction.response.send_message("❌ Chưa có tông môn!", ephemeral=True)
+        if sect['leader_id'] != uid: return await interaction.response.send_message("❌ Chỉ Tông Chủ mới có quyền nghiên cứu!", ephemeral=True)
+        
+        embed = txa_embed("📚 TÀNG KINH CÁC", "Nghiên cứu công pháp để cường hóa toàn tông môn.", discord.Color.blue())
+        for k_id, info in CultivationData.KUNG_FU.items():
+            status = "✅ Đã có" if k_id in sect.get('kung_fu', []) else f"💰 {info['price']} EXP"
+            embed.add_field(name=f"{info['emoji']} {info['name']} ({status})", value=info['desc'], inline=False)
+            
+        class KFView(discord.ui.View):
+            def __init__(self, db, sect, kf_data):
+                super().__init__(timeout=60)
+                self.db, self.sect, self.kf_data = db, sect, kf_data
+                
+            @discord.ui.select(placeholder="Chọn công pháp muốn nghiên cứu...", options=[
+                discord.SelectOption(label=v['name'], value=k, emoji=v['emoji']) 
+                for k, v in CultivationData.KUNG_FU.items() if k not in sect.get('kung_fu', [])
+            ])
+            async def select_kf(self, interaction_select, select):
+                kid = select.values[0]
+                info = CultivationData.KUNG_FU[kid]
+                if self.sect['exp'] < info['price']:
+                    return await interaction_select.response.send_message("❌ Tông môn không đủ linh mạch (EXP)!", ephemeral=True)
+                
+                new_kf = self.sect.get('kung_fu', [])
+                new_kf.append(kid)
+                await self.db.update_sect(self.sect['sect_id'], exp=self.sect['exp'] - info['price'], kung_fu=new_kf)
+                rainbow_log(f"📚 [Sect] Tông môn {self.sect['name']} nghiên cứu thành công: {info['name']}")
+                await interaction_select.response.send_message(f"✅ Đã nghiên cứu thành công **{info['name']}**!", ephemeral=True)
+
+        await interaction.response.send_message(embed=embed, view=KFView(self.db, sect, CultivationData.KUNG_FU), ephemeral=True)
 
     @app_commands.command(name="admin_sect_list", description="[Admin] Danh sách toàn bộ Tông Môn và Đệ Tử")
     async def admin_sect_list(self, interaction: discord.Interaction):

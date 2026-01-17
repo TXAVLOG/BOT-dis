@@ -11,6 +11,7 @@ from core.format import TXAFormat
 from core.database import Database
 from core.game_data import CultivationData
 from core.roles_config import RoleConfig
+from core.combat import CombatSystem
 
 class Cultivation(commands.Cog):
     NARRATIVE_STAGES = [
@@ -25,6 +26,8 @@ class Cultivation(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.db: Database = bot.db
+        self.active_missions = {}
+        self.battling_users = set()
 
     async def check_auto_role(self, member: discord.Member, layer: int):
         """Tự động cập nhật Role và Nickname dựa trên cảnh giới"""
@@ -138,6 +141,41 @@ class Cultivation(commands.Cog):
             except: pass
 
     @tasks.loop(hours=1)
+    async def spirit_stone_buff_task(self):
+        """Buff x3 Linh Thạch ngẫu nhiên mỗi giờ"""
+        users = await self.db.get_all_users()
+        if not users: return
+        
+        # Chọn ngẫu nhiên 3 người may mắn (hoặc 10% user)
+        lucky_count = max(1, len(users) // 10)
+        lucky_users = random.sample(users, min(len(users), lucky_count))
+        
+        now = time.time()
+        expiry = now + 3600 # 1 tiếng
+        
+        for u in lucky_users:
+            buffs = u.get('buffs', {})
+            buffs['stone_x3'] = expiry
+            await self.db.update_user(u['user_id'], buffs=buffs)
+            
+            # Thông báo nếu có thể
+            try:
+                user_obj = await self.bot.fetch_user(int(u['user_id']))
+                embed = txa_embed(
+                    "✨ THIÊN ĐẠO CHIẾU CỐ", 
+                    "Ngươi đã được nhận **Hào Quang Thái Dương**, x3 Linh Thạch nhận được trong 1 giờ tới!", 
+                    discord.Color.gold()
+                )
+                await user_obj.send(embed=embed)
+                rainbow_log(f"🌞 [Thiên Đạo] Đã ban buff x3 Linh Thạch cho đạo hữu {u['name']} ({u['user_id']}).")
+            except: 
+                rainbow_log(f"🌞 [Thiên Đạo] Đã ban buff x3 Linh Thạch cho {u['name']} (Không thể gửi DM).")
+
+    @spirit_stone_buff_task.before_loop
+    async def before_spirit_stone_buff(self):
+        await self.bot.wait_until_ready()
+
+    @tasks.loop(hours=1)
     async def daily_reminder_task(self):
         """Gửi nhắc nhở điểm danh vào 6h sáng (trước reset 1h)"""
         now = datetime.now(VN_TZ)
@@ -147,7 +185,6 @@ class Cultivation(commands.Cog):
         today_reset = now.replace(hour=7, minute=0, second=0, microsecond=0)
         today_date = (now - timedelta(hours=7)).strftime("%Y-%m-%d")
         
-        # Lấy portal link
         portal_url = None
         target_guild = None
         if self.bot.allowed_guilds:
@@ -155,11 +192,8 @@ class Cultivation(commands.Cog):
 
         if target_guild:
             if self.bot.allowed_channel_ids:
-                # Nếu đã set channel thì về đúng kênh đầu tiên (về đúng)
                 portal_url = f"https://discord.com/channels/{target_guild.id}/{self.bot.allowed_channel_ids[0]}"
             else:
-                # Nếu chưa set thì random kỳ duyên trong server
-                # Tránh kênh report
                 target_channels = [
                     c for c in target_guild.text_channels 
                     if c.id != self.bot.report_channel_id and c.permissions_for(target_guild.me).send_messages
@@ -184,7 +218,6 @@ class Cultivation(commands.Cog):
                     f"📈 Streak càng cao, phần thưởng càng lớn!"
                 )
                 embed.add_field(name="🌀 Cổng Dịch Chuyển", value="Nhấn nút bên dưới để trở về Thiên Lam Tông", inline=False)
-                # Dùng TXAFormat để chuẩn hóa thời gian
                 time_now = TXAFormat.time(now.hour * 3600 + now.minute * 60 + now.second)
                 embed.set_footer(text=f"Pháp thời: {time_now} - THIEN-LAM-LIVE-AI BY TXA!")
                 
@@ -202,9 +235,11 @@ class Cultivation(commands.Cog):
 
     async def cog_load(self):
         self.daily_reminder_task.start()
+        self.spirit_stone_buff_task.start()
 
     async def cog_unload(self):
         self.daily_reminder_task.cancel()
+        self.spirit_stone_buff_task.cancel()
 
     async def cog_check(self, ctx):
         """Prefix commands are disabled, but keeping for safety"""
@@ -234,7 +269,8 @@ class Cultivation(commands.Cog):
         uid = str(interaction.user.id)
         user = await self.db.get_user(uid)
         if user:
-            return await interaction.followup.send("⛩️ Ngươi đã ghi danh rồi, hãy tập trung tu luyện!", ephemeral=True)
+            embed = txa_embed("⛩️ Thiên Lam Cấm Chế", "Đạo hữu đã ghi danh nhập môn rồi! Hãy tập trung tu luyện, chớ có phân tâm.", discord.Color.orange())
+            return await interaction.followup.send(embed=embed, ephemeral=True)
         
         msg = await ask_ancestor(
             "Chào đón đệ tử mới.", 
@@ -244,9 +280,23 @@ class Cultivation(commands.Cog):
         await self.db.create_user(uid, interaction.user.display_name)
         await self.check_auto_role(interaction.user, 1) # Call new auto role check
         
+        # Quà nhập môn ngẫu nhiên
+        item_ids = list(CultivationData.ITEMS.keys())
+        gift_id = random.choice(item_ids)
+        item_info = CultivationData.ITEMS[gift_id]
+        
+        now = time.time()
+        expiry = now + item_info['duration']
+        # Tặng vào túi đồ
+        inv = [{"id": gift_id, "count": 1, "expiry": expiry}]
+        await self.db.update_user(uid, inventory=inv)
+        
+        rainbow_log(f"🎁 [Nhập Môn] Đã tặng {item_info['name']} cho tân đệ tử {interaction.user.display_name} ({uid}).")
+        
         embed = txa_embed("⛩️ Thiên Lam Tông - Nhập Môn Ghi Danh", f"**Tổ Sư Từ Dương phán:**\n*\"{msg or 'Đường tu tiên gian nan, đệ tử hãy vững tâm!'}\"*", Color.gold())
+        embed.add_field(name="🎁 Quà Tân Thủ", value=f"Nhận được `{item_info['emoji']} {item_info['name']}` (Hạn dùng: {TXAFormat.duration_detail(item_info['duration'])})", inline=False)
         embed.add_field(name="📜 Pháp Lệnh Khai Mở", value="`/nhiem_vu` • `/daily` • `/tu_luyen` • `/info`", inline=False)
-        embed.set_footer(text="Pháp môn bí truyền - Chỉ mình ngươi nhìn thấy.")
+        embed.set_footer(text="Pháp môn bí truyền - Kiểm tra /inventory để thấy vật phẩm.")
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(name="admin_sync_roles", description="[Admin] Đồng bộ Role & Nickname cho toàn bộ đệ tử")
@@ -338,6 +388,7 @@ class Cultivation(commands.Cog):
             
             embed.add_field(name="Cảnh Giới", value=f"**{rank_name}** (Tầng {user_data['layer']})", inline=True)
             embed.add_field(name="Linh Lực (EXP)", value=f"`{user_data['exp']:,} / {user_data['goal']:,}` ({progress:.1f}%)\n{TXAFormat.progress_bar(progress)}", inline=True)
+            embed.add_field(name="💎 Linh Thạch", value=f"**{user_data['spirit_stones']:,} 💎**", inline=True)
             
             sect_text = "Tán Tu"
             if user_data.get('sect_id'):
@@ -396,30 +447,21 @@ class Cultivation(commands.Cog):
         today_reset = now.replace(hour=reset_hour, minute=0, second=0, microsecond=0)
         if now < today_reset: today_reset -= timedelta(days=1)
 
-        # Reset daily_exp if it's a new day for daily_exp tracking
         if user.get('last_daily_exp_reset', 0) < today_reset.timestamp():
             await self.db.update_user(uid, daily_exp=0, last_daily_exp_reset=now.timestamp())
-            user['daily_exp'] = 0 # Update local user object for current operation
+            user['daily_exp'] = 0 
         
         if user['last_daily'] > today_reset.timestamp():
             await interaction.response.defer(ephemeral=True)
             next_reset = today_reset + timedelta(days=1)
             ts = int(next_reset.timestamp())
-            
-            # Vòng lặp cập nhật real-time 1s/lần
-            # Giới hạn thời gian loop tránh treo tài nguyên (vd: 5 phút)
             loop_end = time.time() + 300 
-            
             while time.time() < loop_end:
                 now_loop = datetime.now(VN_TZ)
                 diff = next_reset - now_loop
                 total_seconds = int(diff.total_seconds())
-                
-                if total_seconds <= 0:
-                    break
-                
+                if total_seconds <= 0: break
                 time_str = TXAFormat.duration_detail(total_seconds)
-                
                 embed = txa_embed(
                     "⏳ Cấm Chế Thổ Nạp",
                     f"**Đạo hữu hãy tịnh tâm!**\nLinh khí trời đất hiện tại đang khô kiệt, cần thời gian để tái tạo hoàn nguyên.\n\n"
@@ -428,39 +470,38 @@ class Cultivation(commands.Cog):
                     discord.Color.orange()
                 )
                 embed.set_thumbnail(url="https://hoathinh3d.moi/wp-content/uploads/2023/02/luyen-khi-10-van-nam-300x450.jpg")
-                embed.set_footer(text="Thiên Lam Tông - Vạn vật hữu hình, linh khí hữu hạn.")
-                
-                try:
-                    await interaction.edit_original_response(embed=embed)
-                except:
-                    break # User có thể đã đóng ephemeral message hoặc interaction hết hạn
-                
+                try: await interaction.edit_original_response(embed=embed)
+                except: break 
                 await asyncio.sleep(1)
             return
         
         await interaction.response.defer(ephemeral=True)
-        
         logical_now = now - timedelta(hours=reset_hour)
         today_date = logical_now.strftime("%Y-%m-%d")
         yesterday_date = (logical_now - timedelta(days=1)).strftime("%Y-%m-%d")
         
         streak = user['daily_streak']
         if user['last_daily_date'] == yesterday_date:
-            streak += 1
+             streak += 1
         elif user['last_daily_date'] != today_date:
-            streak = 1
+             streak = 1
             
         reward = 1000 + (streak * 100)
+        stones = 100 + (streak * 10)
+
+        # Check for x3 buff
+        buffs = user.get('buffs', {})
+        is_x3 = buffs.get('stone_x3', 0) > time.time()
+        if is_x3: stones *= 3
 
         can_add, limit = await self.check_daily_xp_limit(user, reward)
         if not can_add:
-            return await interaction.followup.send(f"🛑 Ngươi đã đạt giới hạn tích lũy linh lực trong ngày (**{limit} EXP**). Hãy nghỉ ngơi, tham gia hoạt động giải trí (như nghe nhạc) để thư giãn!", ephemeral=True)
+            return await interaction.followup.send(f"🛑 Ngươi đã đạt giới hạn tích lũy linh lực trong ngày (**{limit} EXP**). Hãy nghỉ ngơi!", ephemeral=True)
         
         exp = user['exp'] + reward
         layer = user['layer']
         goal = user['goal']
         daily_exp = user.get('daily_exp', 0) + reward
-        
         leveled_up = False
         while exp >= goal:
             exp -= goal
@@ -468,17 +509,16 @@ class Cultivation(commands.Cog):
             goal = layer * 1000
             leveled_up = True
             
-        await self.db.update_user(uid, exp=exp, layer=layer, goal=goal, last_daily=now.timestamp(), last_daily_date=today_date, daily_streak=streak, daily_exp=daily_exp)
-        if leveled_up: await self.check_auto_role(interaction.user, layer) # Call new auto role check
+        await self.db.update_user(uid, exp=exp, layer=layer, goal=goal, last_daily=now.timestamp(), last_daily_date=today_date, daily_streak=streak, daily_exp=daily_exp, spirit_stones=user['spirit_stones'] + stones)
+        if leveled_up: await self.check_auto_role(interaction.user, layer) 
         
         msg = await ask_ancestor("Ban thưởng điểm danh.", f"Đệ tử nhận {reward} EXP ngày {streak}. Viết 1 câu thâm sâu.")
         
         embed = txa_embed("🎁 Thiên Đạo Ban Phước", f"**Tổ Sư Từ Dương phán:**\n*\"{msg or 'Linh khí quán đỉnh, căn cốt tinh anh!'}\"*", Color.blue())
-        embed.add_field(name="📈 Linh Lực Tăng Tiến", value=f"**+{reward} EXP**", inline=True)
+        embed.add_field(name="📈 Linh Lực", value=f"**+{reward} EXP**", inline=True)
+        embed.add_field(name="💰 Linh Thạch", value=f"**+{stones} 💎**{' (🎰 x3)' if is_x3 else ''}", inline=True)
         embed.add_field(name="🔥 Đạo Tâm Chuỗi", value=f"**{streak} ngày**", inline=True)
-        if leveled_up: embed.add_field(name="🔥 ĐỘT PHÁ CẢNH GIỚI", value=f"Chúc mừng đệ tử đã đột phá đạt tới **Tầng {layer}**!", inline=False)
-        
-        embed.set_footer(text="Cơ duyên trời ban - Thiên Lam Tông.")
+        if leveled_up: embed.add_field(name="🔥 ĐỘT PHÁ CẢNH GIỚI", value=f"Đệ tử đã đạt tới **Tầng {layer}**!", inline=False)
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(name="tu_luyen", description="Tọa thiền luyện khí")
@@ -561,10 +601,16 @@ class Cultivation(commands.Cog):
             goal = layer * 1000
             leveled_up = True
             
-        await self.db.update_user(uid, exp=exp, layer=layer, goal=goal, daily_exp=daily_exp)
+        # Linh thạch ngẫu nhiên khi tu luyện
+        stones = random.randint(5, 15)
+        # Check for x3 buff
+        is_x3 = user.get('buffs', {}).get('stone_x3', 0) > time.time()
+        if is_x3: stones *= 3
+        
+        await self.db.update_user(uid, exp=exp, layer=layer, goal=goal, daily_exp=daily_exp, spirit_stones=user['spirit_stones'] + stones)
         if leveled_up: await self.check_auto_role(interaction.user, layer) # Call new auto role check
         
-        res_text = f"Chu thiên tuần hoàn kết thúc, linh khí đã được luyện hóa.\n📈 Nhận được: **{gain} EXP** linh lực.{bonus_msg}"
+        res_text = f"Chu thiên tuần hoàn kết thúc, linh khí đã được luyện hóa.\n📈 Nhận được: **{gain} EXP** linh lực.\n💰 Nhận được: **{stones} Linh Thạch**{ ' (🎰 x3)' if is_x3 else ''}.{bonus_msg}"
         res_embed = txa_embed("🧘 Tu Luyện Hoàn Tất", res_text, Color.green())
         if leveled_up: res_embed.add_field(name="🔥 ĐỘT PHÁ CẢNH GIỚI", value=f"Chúc mừng đệ tử đột phá lên **Tầng {layer}**!")
         
@@ -604,6 +650,7 @@ class Cultivation(commands.Cog):
                     "difficulty": diff,
                     "time": m.get('time', diff * 30),
                     "reward": m.get('reward', diff * 500 + random.randint(100, 300)),
+                    "stones": random.randint(5, 15) + (diff * 2), # Base stones
                     "success_rate": max(10, 100 - (diff * 8)),
                     "done": False
                 })
@@ -622,6 +669,7 @@ class Cultivation(commands.Cog):
                     "difficulty": diff,
                     "time": diff * 40,
                     "reward": diff * 350 + random.randint(10, 50), # Random XP base
+                    "stones": random.randint(5, 10) + diff, # Fallback stones
                     "success_rate": 100 - (diff * 12),
                     "done": False
                 })
@@ -629,48 +677,46 @@ class Cultivation(commands.Cog):
         return missions
 
     async def finalize_mission(self, interaction: discord.Interaction, uid: str, user: dict, mission_id: int, silent: bool = False):
-        """Xử lý kết quả nhiệm vụ bị gián đoạn (silent: chỉ cộng điểm không gửi tin nhắn khôi phục)"""
-        if not silent:
-            await interaction.response.defer(ephemeral=True)
-        
+        if not silent: await interaction.response.defer(ephemeral=True)
         mission = next((m for m in user['missions'] if m['id'] == mission_id), None)
         if not mission:
             await self.db.update_user(uid, current_mission=None)
             return
-        
-        # Re-fetch user để đảm bảo data mới nhất
         user = await self.db.get_user(uid)
         if not user or not user.get('current_mission'): return
-
-        success = random.randint(1, 100) <= mission['success_rate']
         
-        # Xóa current_mission TRƯỚC khi update các cái khác
+        success_rate = mission['success_rate']
+        # Pet "Tiểu Hắc" buff (kiểm tra hạn dùng)
+        now = time.time()
+        if any(i['id'] == 'tu_tieu_hac' and i.get('expiry', 0) > now for i in user['inventory']):
+            success_rate += 20
+        success = random.randint(1, 100) <= success_rate
+        
         await self.db.update_user(uid, current_mission=None)
-        
         if success:
             new_missions = user['missions']
             for m in new_missions:
                 if m['id'] == mission['id']: m['done'] = True
             
             reward = mission['reward']
+            
+            # Stones logic update
+            base_stones = mission.get('stones', random.randint(20, 50))
+            buffs = user.get('buffs', {})
+            is_x3 = buffs.get('stone_x3', 0) > time.time()
+            stones = base_stones * 3 if is_x3 else base_stones
 
             can_add, limit = await self.check_daily_xp_limit(user, reward)
             if not can_add:
-                if not silent:
-                    return await interaction.followup.send(f"🛑 Ngươi đã đạt giới hạn tích lũy linh lực trong ngày (**{limit} EXP**). Hãy nghỉ ngơi, tham gia hoạt động giải trí (như nghe nhạc) để thư giãn!", ephemeral=True)
-                return # If silent, just return without adding XP
+                if not silent: return await interaction.followup.send(f"🛑 Đạt giới hạn EXP (**{limit}**).", ephemeral=True)
+                return 
 
-            # Sect Bonus XP
-            if user.get('sect_id'):
-                sect_bonus_xp = random.randint(50, 100)
-                reward += sect_bonus_xp
-                
+            if user.get('sect_id'): reward += random.randint(50, 100)
             bonus_msg = ""
             if user['daily_streak'] >= 3:
-                bonus_pct = min(0.5, (user['daily_streak'] // 3) * 0.05)
-                bonus_xp = int(reward * bonus_pct)
+                bonus_xp = int(reward * min(0.5, (user['daily_streak'] // 3) * 0.05))
                 reward += bonus_xp
-                bonus_msg = f"\n🔥 **Hào Quang Streak:** +{bonus_xp} EXP"
+                bonus_msg = f"\n🔥 **Streak Bonus:** +{bonus_xp} EXP"
 
             exp = user['exp'] + reward
             layer = user['layer']
@@ -683,34 +729,20 @@ class Cultivation(commands.Cog):
                 goal = max(layer * 1000, 200)
                 leveled_up = True
             
-            await self.db.update_user(uid, missions=new_missions, missions_completed=user['missions_completed'] + 1, exp=exp, layer=layer, goal=goal, daily_exp=daily_exp)
-            if leveled_up: await self.check_auto_role(interaction.user, layer) # Call new auto role check
+            await self.db.update_user(uid, missions=new_missions, missions_completed=user['missions_completed'] + 1, exp=exp, layer=layer, goal=goal, daily_exp=daily_exp, spirit_stones=user['spirit_stones'] + stones)
+            if leveled_up: await self.check_auto_role(interaction.user, layer) 
             
             if not silent:
-                res_embed = txa_embed(
-                    "✅ Công Khóa Đã Hoàn Tất", 
-                    f"Nhiệm vụ **{mission['title']}** đã hoàn thành viên mãn!\n"
-                    f"📈 Nhận được: **{reward} EXP** linh lực.{bonus_msg}", 
-                    Color.green()
-                )
-                if leveled_up: res_embed.add_field(name="🔥 ĐỘT PHÁ CẢNH GIỚI", value=f"Ngươi đã đạt tới **Tầng {layer}**!")
+                res_embed = txa_embed("✅ Hoàn Thành", f"**{mission['title']}** xong!\n📈: **{reward} EXP**{bonus_msg}\n💰: **{stones} Linh Thạch**{ ' (🎰 x3)' if is_x3 else ''}", Color.green())
+                if leveled_up: res_embed.add_field(name="🔥 ĐỘT PHÁ", value=f"Tầng {layer}!")
                 await interaction.followup.send(embed=res_embed, ephemeral=True)
         else:
-            # Ghi lại thời gian thất bại để hồi phục (3 phút)
             new_missions = user['missions']
             for m in new_missions:
-                if m['id'] == mission['id']:
-                    m['retry_time'] = int(time.time() + 180)
+                if m['id'] == mission['id']: m['retry_time'] = int(time.time() + 180)
             await self.db.update_user(uid, missions=new_missions)
-
             if not silent:
-                res_embed = txa_embed(
-                    "❌ Tâm Ma Xâm Nhập", 
-                    f"Nhiệm vụ **{mission['title']}** đã thất bại do tâm thần bất ổn.\n"
-                    f"⏱️ Ngươi cần **3 phút** để tịnh tâm phục hồi trước khi thử lại nhiệm vụ này.", 
-                    Color.red()
-                )
-                await interaction.followup.send(embed=res_embed, ephemeral=True)
+                await interaction.followup.send(embed=txa_embed("❌ Thất Bại", f"**{mission['title']}** thất bại. Chờ 3 phút.", Color.red()), ephemeral=True)
 
     def get_diff_name(self, diff: int):
         """Chuyển độ khó thành danh xưng tu tiên"""
@@ -787,26 +819,36 @@ class Cultivation(commands.Cog):
                 d += f"*(Đã cộng thêm {sect_bonus_limit} nhiệm vụ tông môn)*\n"
             d += "\n"
 
+            has_tieu_hac = any(i['id'] == 'tu_tieu_hac' and i.get('expiry', 0) > time.time() for i in user.get('inventory', []))
+            
             for m in user['missions']:
-                m_id = int(m['id'])
+                m_id = m['id']
                 if m_id == current_mission_id and curr_rem > 0:
-                    status = "⚔️"  # Đang làm
+                    status = "⚔️"
                     time_info = f" • **Còn {TXAFormat.remaining_detail(curr_rem)}**"
                 elif m['done']:
-                    status = "✅"  # Hoàn thành
+                    status = "✅"
                     time_info = ""
                 elif m.get('retry_time') and time.time() < m['retry_time']:
-                    status = "❌"  # Thất bại - Đang cooldown
+                    status = "❌"
                     rem = int(m['retry_time'] - time.time())
                     time_info = f" • **Thử lại sau {rem}s**"
                 else:
-                    status = "⏳"  # Chưa làm
+                    status = "⏳"
                     time_info = ""
                 
                 diff_text = self.get_diff_name(m['difficulty'])
+                rate = m['success_rate']
+                bonus_rate_text = f" (+20%)" if has_tieu_hac else ""
+                
                 d += f"{status} **[{m['id']}] {m['title']}**{time_info}\n"
                 d += f"└ *Độ khó: {diff_text}*\n"
-                d += f"└ *Thưởng: {TXAFormat.number(m['reward'])} Linh Lực • TG: {TXAFormat.remaining_detail(m['time'])} • Thành công: {m['success_rate']}%*\n\n"
+                
+                stones_show = m.get('stones', 10)
+                is_x3 = user.get('buffs', {}).get('stone_x3', 0) > time.time()
+                stone_txt = f"{stones_show*3 if is_x3 else stones_show} 💎{' (🎰x3)' if is_x3 else ''}"
+                
+                d += f"└ *Thưởng: {TXAFormat.number(m['reward'])} EXP • {stone_txt} • TG: {TXAFormat.remaining_detail(m['time'])} • Thành công: {rate}%{bonus_rate_text}*\n\n"
             return d
 
         curr_rem = 0
@@ -1040,6 +1082,12 @@ class Cultivation(commands.Cog):
     @app_commands.command(name="bxh", description="Bảng xếp hạng Thiên Lam Tông")
     async def bxh(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
+        uid = str(interaction.user.id)
+        user = await self.db.get_user(uid)
+        if not user:
+            embed = txa_embed("⛩️ Thiên Lam Cấm Chế", "Ngươi chưa ghi danh! Hãy dùng `/start` để nhập môn.", discord.Color.red())
+            return await interaction.followup.send(embed=embed, ephemeral=True)
+            
         top = await self.db.get_top_users(10)
         
         desc = "```ansi\n"
@@ -1069,6 +1117,279 @@ class Cultivation(commands.Cog):
         embed.add_field(name="✨ Pháp Tắc", value="Đạo hữu có tu vi thâm hậu nhất sẽ đứng đầu thiên bảng.", inline=False)
         embed.set_footer(text="Thần bảng phong vân - Thiên Lam Tông.")
         await interaction.followup.send(embed=embed, ephemeral=True)
+
+    def get_active_inventory(self, user):
+        """Lấy danh sách vật phẩm có thể sử dụng (trong kho) hoặc đang kích hoạt (buff)"""
+        inv = user.get('inventory', [])
+        now = time.time()
+        # Giữ lại nếu còn số lượng (chưa dùng) HOẶC còn thời hạn (đang buff)
+        active_inv = [it for it in inv if it.get('count', 0) > 0 or it.get('expiry', 0) > now]
+        return active_inv
+
+    async def ensure_active_inventory(self, uid, user):
+        """Kiểm tra và dọn dẹp vật phẩm hết hạn hoặc đã dùng hết trong DB"""
+        inv = user.get('inventory', [])
+        now = time.time()
+        new_inv = []
+        changed = False
+        
+        for it in inv:
+            count = it.get('count', 0)
+            expiry = it.get('expiry', 0)
+            
+            # Nếu còn số lượng hoặc chưa hết hạn thì giữ lại
+            if count > 0 or expiry > now:
+                # Nếu đã hết hạn nhưng vẫn còn trong list (do còn count), reset expiry về 0 để clean
+                if expiry > 0 and expiry <= now:
+                    it['expiry'] = 0
+                    changed = True
+                new_inv.append(it)
+            else:
+                changed = True
+        
+        if changed:
+            await self.db.update_user(uid, inventory=new_inv)
+            user['inventory'] = new_inv
+            rainbow_log(f"🧹 [Inventory] Đã dọn dẹp vật phẩm hết hạn/hết số lượng của {user['name']}.")
+        return new_inv
+
+    @app_commands.command(name="inventory", description="Xem túi thần thông (Cập nhật Real-time & Hạn dùng)")
+    async def inventory(self, interaction: discord.Interaction):
+        uid = str(interaction.user.id)
+        user = await self.db.get_user(uid)
+        if not user:
+            embed = txa_embed("⛩️ Thiên Lam Cấm Chế", "Ngươi chưa ghi danh! Hãy dùng `/start` để nhìn thấu túi thần thông.", discord.Color.red())
+            return await interaction.response.send_message(embed=embed, ephemeral=True)
+            
+        msg = await interaction.response.send_message("🌀 Đang kiểm vật trong túi...", ephemeral=True)
+        
+        start_time = time.time()
+        while time.time() - start_time < 120:
+            user = await self.db.get_user(uid)
+            if not user: break
+            
+            now = time.time()
+            # Dọn dẹp real-time
+            inv = await self.ensure_active_inventory(uid, user)
+            
+            if not inv:
+                content = "Trống trơn, không có một viên linh thạch hay pháp bảo nào."
+            else:
+                content = ""
+                for item in inv:
+                    item_data = CultivationData.ITEMS.get(item['id'], {"name": "Vô Danh", "emoji": "❓"})
+                    count = item.get('count', 0)
+                    expiry = item.get('expiry', 0)
+                    
+                    parts = []
+                    if count > 0:
+                        parts.append(f"📦 Trong kho: **x{count}**")
+                    if expiry > now:
+                        rem = int(expiry - now)
+                        parts.append(f"✨ Đang kích hoạt: `{TXAFormat.duration_detail(rem)}`")
+                    
+                    content += f"{item_data['emoji']} **{item_data['name']}**\n└ { ' | '.join(parts) if parts else 'Đã cạn kiệt'}\n"
+            
+            embed = txa_embed("👋 Túi Thần Thông", content, discord.Color.blue())
+            embed.set_footer(text=f"Linh Thạch: {user['spirit_stones']} 💎 | Tự hủy sau 2 phút")
+            
+            try: await interaction.edit_original_response(content=None, embed=embed)
+            except: break
+            await asyncio.sleep(5)
+            
+        try: await interaction.delete_original_response()
+        except: pass
+
+    @app_commands.command(name="shop", description="Vạn Bảo Các - Xem danh sách bảo vật")
+    async def shop(self, interaction: discord.Interaction):
+        uid = str(interaction.user.id)
+        user = await self.db.get_user(uid)
+        if not user:
+            embed = txa_embed("⛩️ Thiên Lam Cấm Chế", "Ngươi chưa ghi danh! Hãy dùng `/start` để vào Vạn Bảo Các.", discord.Color.red())
+            return await interaction.response.send_message(embed=embed, ephemeral=True)
+            
+        embed = txa_embed("⛩️ VẠN BẢO CÁC", "Nơi quy tụ kỳ trân dị bảo trong thiên hạ.", discord.Color.purple())
+        for item_id, info in CultivationData.ITEMS.items():
+            dur_str = TXAFormat.duration_detail(info.get('duration', 0))
+            embed.add_field(name=f"{info['emoji']} {info['name']} - 💰 {info['price']}", value=f"{info['desc']}\n*Thời hạn: {dur_str}*", inline=False)
+        embed.set_footer(text="Sử dụng /buy để mua vật phẩm.")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="buy", description="Mua vật phẩm từ Vạn Bảo Các")
+    @app_commands.describe(item_id="Chọn vật phẩm muốn mua")
+    async def buy(self, interaction: discord.Interaction, item_id: str):
+        uid = str(interaction.user.id)
+        user = await self.db.get_user(uid)
+        if not user: return await interaction.response.send_message("❌ Chưa nhập môn!", ephemeral=True)
+        
+        if item_id not in CultivationData.ITEMS:
+            return await interaction.response.send_message("❌ Vật phẩm không tồn tại!", ephemeral=True)
+            
+        info = CultivationData.ITEMS[item_id]
+        if user['spirit_stones'] < info['price']:
+            return await interaction.response.send_message(f"❌ Cần thêm {info['price'] - user['spirit_stones']} 💎 để mua!", ephemeral=True)
+            
+        # Dọn dẹp đồ hết hạn trước
+        inv = await self.ensure_active_inventory(uid, user)
+        found = False
+        for item in inv:
+            if item['id'] == item_id:
+                item['count'] = item.get('count', 0) + 1
+                found = True
+                break
+        if not found:
+            inv.append({"id": item_id, "count": 1, "expiry": 0})
+        
+        await self.db.update_user(uid, spirit_stones=user['spirit_stones'] - info['price'], inventory=inv)
+        rainbow_log(f"🛒 [Shop] {user['name']} đã mua {info['name']}, vật phẩm đã vào túi.")
+        await interaction.response.send_message(f"✅ Đã mua thành công **{info['emoji']} {info['name']}**! Vật phẩm đã được cất vào túi thần thông. Hãy dùng `/use_item` để kích hoạt.", ephemeral=True)
+
+    @buy.autocomplete("item_id")
+    async def buy_autocomplete(self, interaction: discord.Interaction, current: str):
+        user = await self.db.get_user(str(interaction.user.id))
+        if not user: return []
+        
+        choices = []
+        for iid, info in CultivationData.ITEMS.items():
+            if current.lower() in info['name'].lower():
+                # Hiển thị dấu ✅ nếu đủ tiền, ❌ nếu không đủ
+                prefix = "✅" if user['spirit_stones'] >= info['price'] else "❌"
+                choices.append(app_commands.Choice(name=f"{prefix} {info['name']} ({info['price']} 💎)", value=iid))
+        return choices[:25]
+
+    @app_commands.command(name="use_item", description="Sử dụng vật phẩm trong túi")
+    @app_commands.describe(item_id="Chọn vật phẩm muốn dùng")
+    async def use_item(self, interaction: discord.Interaction, item_id: str):
+        uid = str(interaction.user.id)
+        user = await self.db.get_user(uid)
+        if not user:
+            embed = txa_embed("⛩️ Thiên Lam Cấm Chế", "Ngươi chưa ghi danh! Hãy dùng `/start` để sử dụng pháp bảo.", discord.Color.red())
+            return await interaction.response.send_message(embed=embed, ephemeral=True)
+        
+        # Lọc đồ hết hạn
+        inv = await self.ensure_active_inventory(uid, user)
+        item_idx = -1
+        for i, it in enumerate(inv):
+            if it['id'] == item_id and it.get('count', 0) > 0:
+                item_idx = i
+                break
+                
+        if item_idx == -1:
+            return await interaction.response.send_message("❌ Ngươi không có vật phẩm này!", ephemeral=True)
+            
+        item_info = CultivationData.ITEMS.get(item_id)
+        if not item_info: return
+        
+        # 1. Trừ số lượng trong kho
+        inv[item_idx]['count'] -= 1
+        now = time.time()
+        
+        # 2. Xử lý thời hạn (Buff)
+        duration = item_info.get('duration', 0)
+        has_buff = False
+        if duration > 0:
+            # Cộng dồn thời gian nếu đang có buff active, nếu không thì tính từ now
+            inv[item_idx]['expiry'] = max(inv[item_idx].get('expiry', 0), now) + duration
+            has_buff = True
+            
+        # 3. Xử lý hiệu ứng tức thì (EXP)
+        effect = item_info.get('effect', {})
+        exp_gain = effect.get('exp', 0)
+        leveled_up = False
+        new_layer = user['layer']
+        new_goal = user['goal']
+        new_exp = user['exp']
+        
+        if exp_gain > 0:
+            new_exp += exp_gain
+            while new_exp >= new_goal:
+                new_exp -= new_goal
+                new_layer += 1
+                new_goal = max(new_layer * 1000, 200)
+                leveled_up = True
+                
+        # Lưu thay đổi
+        await self.db.update_user(uid, exp=new_exp, layer=new_layer, goal=new_goal, inventory=inv)
+        
+        # Thông báo
+        desc = f"Ngươi đã sử dụng **{item_info['emoji']} {item_info['name']}**.\n"
+        if exp_gain > 0:
+            desc += f"📈 Nhận được: **{exp_gain} EXP** linh lực.\n"
+        if has_buff:
+            dur_str = TXAFormat.duration_detail(duration)
+            desc += f"✨ Kích hoạt Buff: **+{dur_str}** vào thời hạn sử dụng.\n"
+        
+        embed = txa_embed("✨ Sử Dụng Vật Phẩm", desc, discord.Color.green())
+        if leveled_up: 
+            embed.add_field(name="🔥 ĐỘT PHÁ", value=f"Ngươi đã tiến tới **Tầng {new_layer}**!")
+            await self.check_auto_role(interaction.user, new_layer)
+            
+        rainbow_log(f"💊 [Item] {user['name']} đã dùng {item_info['name']}.")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @use_item.autocomplete("item_id")
+    async def use_item_autocomplete(self, interaction: discord.Interaction, current: str):
+        user = await self.db.get_user(str(interaction.user.id))
+        if not user: return []
+        
+        # Chỉ hiển thị đồ còn hạn
+        inv = self.get_active_inventory(user)
+        
+        choices = []
+        for it in inv:
+            # Chỉ cho phép chọn vật phẩm còn số lượng trong kho
+            if it.get('count', 0) <= 0: continue
+            
+            info = CultivationData.ITEMS.get(it['id'])
+            if info and current.lower() in info['name'].lower():
+                choices.append(app_commands.Choice(name=f"{info['emoji']} {info['name']} (x{it['count']})", value=it['id']))
+        return choices[:25]
+
+    @app_commands.command(name="thach_dau", description="Giao đấu tu tiên - AI Tường thuật")
+    async def thach_dau(self, interaction: discord.Interaction, user: discord.Member):
+        if user.id == interaction.user.id: 
+            return await interaction.response.send_message("❌ Tu vi của ngươi chưa đủ để phân thân tự đấu!", ephemeral=True)
+            
+        p1_data = await self.db.get_user(str(interaction.user.id))
+        p2_data = await self.db.get_user(str(user.id))
+        
+        if not p1_data or not p2_data:
+            return await interaction.response.send_message("❌ Một trong hai đạo hữu chưa bước vào con đường tu đạo!", ephemeral=True)
+            
+        # Check if users are busy
+        if interaction.user.id in self.battling_users:
+            return await interaction.response.send_message("❌ Ngươi đang trong một trận đấu pháp khác!", ephemeral=True)
+        if user.id in self.battling_users:
+            return await interaction.response.send_message(f"❌ {user.display_name} đang bận đấu pháp với người khác!", ephemeral=True)
+            
+        # Lock users
+        self.battling_users.add(interaction.user.id)
+        self.battling_users.add(user.id)
+        
+        try:
+            # DM Notification
+            try:
+                channel_link = f"https://discord.com/channels/{interaction.guild.id}/{interaction.channel.id}"
+                embed_dm = txa_embed(
+                    "⚔️ LỜI TUYÊN CHIẾN",
+                    f"**{interaction.user.display_name}** đã gửi lời thách đấu đến ngươi tại **#{interaction.channel.name}**!\n\n👉 [Nhấn vào đây để đến Đấu Pháp Đài]({channel_link})",
+                    discord.Color.red()
+                )
+                await user.send(embed=embed_dm)
+            except: 
+                rainbow_log(f"⚠️ Không thể gửi DM thách đấu cho {user.name}")
+            
+            rainbow_log(f"⚔️ [Combat] {interaction.user.name} thách đấu {user.name}")
+            combat = CombatSystem(self.bot, interaction.user, user, p1_data, p2_data)
+            await combat.start_battle(interaction)
+            
+        except Exception as e:
+            rainbow_log(f"❌ Lỗi Combat: {e}")
+            await interaction.followup.send(f"⚠️ Trận đấu bị gián đoạn do lỗi thiên đạo: {e}", ephemeral=True)
+        finally:
+            # Release lock
+            if interaction.user.id in self.battling_users: self.battling_users.remove(interaction.user.id)
+            if user.id in self.battling_users: self.battling_users.remove(user.id)
 
 async def setup(bot):
     await bot.add_cog(Cultivation(bot))
