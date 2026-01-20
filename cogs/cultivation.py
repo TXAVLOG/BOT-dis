@@ -360,6 +360,8 @@ class Cultivation(commands.Cog):
 
             rank_name, rank_info = get_rank_info(user_data['layer'])
             progress = (user_data['exp'] / user_data['goal']) * 100
+            if progress > 99.9 and progress < 100:
+                progress = 99.9
             
             # Mission Info
             # Check sect for daily limit
