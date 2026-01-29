@@ -63,6 +63,8 @@ class CultivationData:
         "linh_thach_tiny": {"name": "Linh Thạch Vụn", "price": 100, "desc": "Tăng 200 EXP. Hạn dùng: 30 phút.", "effect": {"exp": 200}, "emoji": "💎", "duration": 1800},
         "tu_tieu_hac": {"name": "Linh Thú Tiểu Hắc", "price": 50000, "desc": "Tăng 20% tỉ lệ thành công nhiệm vụ. Hạn dùng: 5 phút.", "effect": {"mission_buff": 20}, "emoji": "🦅", "duration": 300},
         "kiem_ri_set": {"name": "Kiếm Rỉ Sét", "price": 100000, "desc": "Tăng x2 sát thương khi đấu pháp. Hạn dùng: 10 phút.", "effect": {"combat_buff": 1.0}, "emoji": "🗡️", "duration": 600},
+        "thien_am_cam": {"name": "Thiên Âm Cầm", "price": 25000, "desc": "Cổ cầm ngàn năm, tăng 20% EXP khi nghe nhạc. Hạn dùng: 3 giờ.", "effect": {"music_buff": 0.2}, "emoji": "🎻", "duration": 10800},
+        "khi_van_phu": {"name": "Tiên Thiên Khí Vận", "price": 50000, "desc": "Tăng 20% may mắn nhận Linh Thạch khi nghe nhạc. Hạn dùng: 1 giờ.", "effect": {"luck_buff": 20}, "emoji": "🍀", "duration": 3600},
     }
 
     # --- KUNG FU (CÔNG PHÁP) ---

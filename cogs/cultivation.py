@@ -389,6 +389,7 @@ class Cultivation(commands.Cog):
             embed.set_thumbnail(url=target_user.avatar.url if target_user.avatar else None)
             
             embed.add_field(name="Cảnh Giới", value=f"**{rank_name}** (Tầng {user_data['layer']})", inline=True)
+            embed.add_field(name="🔥 Chuỗi Tu Luyện", value=f"**{user_data.get('daily_streak', 0)} ngày**", inline=True)
             embed.add_field(name="Linh Lực (EXP)", value=f"`{user_data['exp']:,} / {user_data['goal']:,}` ({progress:.1f}%)\n{TXAFormat.progress_bar(progress)}", inline=True)
             embed.add_field(name="💎 Linh Thạch", value=f"**{user_data['spirit_stones']:,} 💎**", inline=True)
             
