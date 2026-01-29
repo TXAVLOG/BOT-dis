@@ -34,3 +34,6 @@ scripts/
 # Virtual Env
 venv/
 env/
+
+# Secrets
+cookies.txt

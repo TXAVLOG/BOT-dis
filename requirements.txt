@@ -4,7 +4,7 @@ python-dotenv
 colorama
 pytz
 aiohttp
-yt-dlp
+pytubefix
 PyNaCl
 gTTS
 aiosqlite
