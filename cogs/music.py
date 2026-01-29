@@ -84,7 +84,7 @@ class SearchResultView(discord.ui.View):
                 Color.gold()
             )
             await interaction.followup.send(embed=embed, ephemeral=True)
-            await self.cog.play_next(guild_id, interaction.channel)
+            await self.cog.play_next(guild_id, interaction.channel, interaction=interaction)
 
 class MusicControlView(discord.ui.View):
     def __init__(self, cog, guild_id):
@@ -202,8 +202,16 @@ class Music(commands.Cog):
             del self.now_playing_msgs[guild_id]
 
     def cleanup_cache(self):
-        # Implement primitive cleanup: keep last 50 files or clear older than 24h
-        pass
+        """Dọn dẹp linh khí cũ (files > 24h)"""
+        try:
+            now = time.time()
+            for f in os.listdir(DOWNLOADS_DIR):
+                path = os.path.join(DOWNLOADS_DIR, f)
+                if os.path.isfile(path) and now - os.path.getmtime(path) > 86400:
+                    os.remove(path)
+            rainbow_log("🧹 [Cache] Đã thanh tẩy linh khí rác (>24h).")
+        except Exception as e:
+            rainbow_log(f"⚠️ Lỗi thanh tẩy cache: {e}")
 
     async def search_youtube(self, query: str, max_results: int = 5) -> List[dict]:
         """Tìm kiếm YouTube bằng pytubefix"""
@@ -228,13 +236,12 @@ class Music(commands.Cog):
             return []
 
     async def download_media(self, url: str, status_msg: discord.Message = None):
-        """Tải nhạc bằng pytubefix"""
+        """Tải nhạc bằng pytubefix với Real-time Update & Rainbow Log"""
         # Kiểm tra Cache
         if url in self.cache_manifest:
             cached_path = self.cache_manifest[url]
             if os.path.exists(cached_path):
                 rainbow_log(f"⚡ [Cache Hit] Khai thác linh khí sẵn có cho: {url}")
-                # Lấy info nhanh
                 try:
                     yt = await asyncio.get_running_loop().run_in_executor(None, lambda: YouTube(url))
                     return cached_path, yt.title, yt.length, yt.thumbnail_url
@@ -244,7 +251,7 @@ class Music(commands.Cog):
         rainbow_log(f"📥 [Pytube] Đang triệu hồi linh khí: {url}")
         
         # Callback wrapper for progress
-        progress_data = {'percent': 0}
+        progress_data = {'percent': 0.0}
         
         def progress_func(stream, chunk, bytes_remaining):
             total_size = stream.filesize
@@ -258,7 +265,6 @@ class Music(commands.Cog):
         def download_logic():
             yt = YouTube(url, on_progress_callback=progress_func)
             stream = yt.streams.get_audio_only()
-            # Filename unique
             filename = f"{int(time.time())}.mp3"
             path = stream.download(output_path=DOWNLOADS_DIR, filename=filename)
             return path, yt.title, yt.length, yt.thumbnail_url
@@ -267,31 +273,57 @@ class Music(commands.Cog):
         update_task = None
         if status_msg:
             async def update_progress():
-                last_update = 0
+                last_update = -1
+                start_time = time.time()
                 while True:
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(0.5) # Update visually every 0.5s
                     p = progress_data['percent']
+                    
+                    # Rainbow Log every ~5-10% change to avoid console spam
+                    if p - last_update >= 5 or (p >= 100 and last_update < 100):
+                        rainbow_log(f"📥 [Tiến Trình] Đang nạp linh khí: {p:.2f}%")
+                        last_update = p
+
                     if p >= 100: break
                     
-                    if p - last_update >= 15:
-                        bar = TXAFormat.progress_bar(p, 15, "music")
-                        embed = txa_embed(
-                            "📥 Đang Triệu Hồi (Pytube)...",
-                            f"`{bar}` **{p:.1f}%**",
-                            Color.blue()
-                        )
-                        try: await status_msg.edit(embed=embed)
-                        except: pass
-                        last_update = p
+                    # Real-time Embed Update
+                    bar = TXAFormat.progress_bar(p, 15, "music")
+                    elapsed = time.time() - start_time
+                    speed_note = f"⏱️ Đã chạy: {elapsed:.1f}s"
+                    
+                    embed = txa_embed(
+                        "📥 Đang Triệu Hồi (Pytube)...",
+                        f"**{url}**\n\n`{bar}` **{p:.2f}%**\n*{speed_note}*",
+                        Color.blue()
+                    )
+                    try: await status_msg.edit(embed=embed)
+                    except: pass
+            
             update_task = asyncio.create_task(update_progress())
 
         try:
             path, title, duration, thumb = await loop.run_in_executor(None, download_logic)
+            if update_task: update_task.cancel()
+            
+            # Final Success Update
+            if status_msg:
+                embed = txa_embed(
+                    "✅ Triệu Hồi Hoàn Tất",
+                    f"Đã nạp xong linh khí: **{title}**\n`100.00%` - Sẵn sàng thi triển.",
+                    Color.green()
+                )
+                try: await status_msg.edit(embed=embed)
+                except: pass
+                
         except Exception as e:
             if update_task: update_task.cancel()
+            rainbow_log(f"❌ Lỗi tải file: {e}")
+            if status_msg:
+                try:
+                    embed = txa_embed("❌ Vỡ Trận Triệu Hồi", f"Lỗi nạp linh khí: `{str(e)}`", Color.red())
+                    await status_msg.edit(embed=embed)
+                except: pass
             raise e
-
-        if update_task: update_task.cancel()
 
         # Update cache
         self.cache_manifest[url] = path
@@ -418,13 +450,13 @@ class Music(commands.Cog):
             except:
                 pass
 
-    async def play_next(self, guild_id: int, channel: discord.TextChannel = None):
+    async def play_next(self, guild_id: int, channel: discord.TextChannel = None, interaction: discord.Interaction = None):
         """Phát bài tiếp theo trong hàng chờ"""
         queue = self.queues.get(guild_id, [])
         if not queue:
             # End of queue logic
             if guild_id in self.current_meta:
-               self.finalize_rewards(guild_id)
+               await self.finalize_rewards(guild_id)
             
             self.current_meta.pop(guild_id, None)
             if guild_id in self.now_playing_msgs:
@@ -445,15 +477,20 @@ class Music(commands.Cog):
         item = queue.pop(0)
         self.queues[guild_id] = queue
         
-        # Send loading message
+        # Send loading message (Ephemeral if interaction exists, else Channel)
         target_channel = channel or self.bot.get_channel(item.get('channel_id'))
         status_msg = None
-        if target_channel:
+        
+        try:
             embed = txa_embed("📥 Đang Triệu Hồi Tiên Nhạc...", f"**{item['title']}**", Color.blue())
-            try:
+            if interaction:
+                # Use interaction for ephemeral status if it's the start of the session
+                status_msg = await interaction.followup.send(embed=embed, ephemeral=True)
+                self.add_transient(guild_id, status_msg)
+            elif target_channel:
                 status_msg = await target_channel.send(embed=embed)
                 self.add_transient(guild_id, status_msg)
-            except: pass
+        except: pass
         
         try:
             path, title, duration, thumb = await self.download_media(item['url'], status_msg)
@@ -490,12 +527,9 @@ class Music(commands.Cog):
                 "last_tick": time.time()
             }
             
-            # Cleanup messages
-            if status_msg:
-                try: await status_msg.delete()
-                except: pass
-            
-            self._cleanup_transients(guild_id, status_msg)
+            # Cleanup transient status message after a short delay or let updater handle it
+            if status_msg and not interaction: # Ephemerals don't need manual deletion usually or fail
+                self._cleanup_transients(guild_id, status_msg)
             
             # Update Display
             await self.update_now_playing_display(guild_id, create_new=True)
@@ -504,11 +538,8 @@ class Music(commands.Cog):
             rainbow_log(f"❌ Lỗi phát nhạc: {e}")
             if "No space left" in str(e): self.cleanup_cache()
             
-            if status_msg:
-                try:
-                    embed = txa_embed("❌ Lỗi Triệu Hồi", f"Không thể phát bài: **{item['title']}**\n`{str(e)}`", Color.red())
-                    await status_msg.edit(embed=embed)
-                except: pass
+            # Status message already edited with error in download_media
+            await asyncio.sleep(2)
             await self.play_next(guild_id, target_channel)
 
     async def finalize_rewards(self, guild_id):
@@ -592,7 +623,10 @@ class Music(commands.Cog):
     @app_commands.describe(query="Tên bài hát hoặc URL YouTube")
     async def ytplay(self, interaction: discord.Interaction, query: str):
         if not await self.check_access(interaction): return
-        await interaction.response.defer()
+        
+        # EPHEMERAL DEFER to keep download logs private to the user
+        await interaction.response.defer(ephemeral=True)
+        
         guild_id = interaction.guild_id
         vc = interaction.guild.voice_client
         if not vc:
@@ -606,12 +640,11 @@ class Music(commands.Cog):
             item = {"url": query, "title": "Tiên Nhạc URL", "requester": interaction.user.id, "channel_id": interaction.channel_id}
             self.queues.setdefault(guild_id, []).append(item)
             if not vc.is_playing() and not vc.is_paused():
-                await self.play_next(guild_id, interaction.channel)
-                embed = txa_embed("⏳ Triệu Hồi", "Đang khởi dẫn...", Color.gold()) 
-                await interaction.followup.send(embed=embed)
+                # PASS INTERACTION for Private Loading Status
+                await self.play_next(guild_id, interaction.channel, interaction=interaction)
             else:
                 embed = txa_embed("➕ Tàng Kinh Các", "Đã thêm vào hàng chờ.", Color.blue())
-                await interaction.followup.send(embed=embed)
+                await interaction.followup.send(embed=embed, ephemeral=True)
         else:
             results = await self.search_youtube(query)
             if not results:
@@ -643,7 +676,15 @@ class Music(commands.Cog):
     async def ytqueue(self, interaction: discord.Interaction):
          # ... reuse previous logic or simplified ...
          queue = self.queues.get(interaction.guild_id, [])
-         await interaction.response.send_message(f"📜 Hàng chờ: {len(queue)} bài.", ephemeral=True)
+         if not queue:
+             return await interaction.response.send_message("Empty queue!", ephemeral=True)
+         
+         desc = ""
+         for i, item in enumerate(queue[:10], 1):
+             desc += f"{i}. {item['title']} - <@{item['requester']}>\n"
+         
+         embed = txa_embed("📜 Hàng Chờ Tiên Nhạc", desc or "Trống trơn...", Color.blue())
+         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(name="ytclear", description="Xóa hàng chờ")
     async def ytclear(self, interaction: discord.Interaction):
