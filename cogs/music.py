@@ -529,7 +529,7 @@ class Music(commands.Cog):
             
             # Cleanup transient status message after a short delay or let updater handle it
             if status_msg and not interaction: # Ephemerals don't need manual deletion usually or fail
-                self._cleanup_transients(guild_id, status_msg)
+                await self._cleanup_transients(guild_id, status_msg)
             
             # Update Display
             await self.update_now_playing_display(guild_id, create_new=True)
@@ -559,7 +559,7 @@ class Music(commands.Cog):
                 await self.bot.db.update_user(str(user_id), exp=new_exp, spirit_stones=new_stones)
                 rainbow_log(f"🎁 Reward saved for {user_id}: +{xp} XP, +{money} Stones")
 
-    def _cleanup_transients(self, guild_id, current_msg):
+    async def _cleanup_transients(self, guild_id, current_msg):
         if guild_id in self.transient_msgs:
             kept_msgs = []
             for msg in self.transient_msgs[guild_id]:
@@ -659,7 +659,7 @@ class Music(commands.Cog):
             for i, r in enumerate(results[:5]):
                  res_embeds.append(txa_embed(f"{i+1}. {r['title']}", f"⏱️ {TXAFormat.time(r['duration'])}", Color.dark_grey()))
 
-            msg = await interaction.followup.send(embeds=res_embeds, view=view)
+            msg = await interaction.followup.send(embeds=res_embeds, view=view, ephemeral=True)
             self.add_transient(guild_id, msg)
 
     @app_commands.command(name="ytnow", description="Xem thông tin bài đang phát")
