@@ -196,13 +196,32 @@ def get_rank_info(layer: int):
             return rank_name, info
     return "Phàm Nhân", RANKS["Phàm Nhân"]
 
-def txa_embed(title: str, desc: str, color: Color = Color.blue()):
+def txa_embed(title: str, desc: str, color: Color = Color.from_rgb(47, 49, 54), thumbnail: str = None, image: str = None, footer: str = None):
+    """
+    Tạo Embed với giao diện Premium (Thiên Lam Tông Style).
+    Mặc định sử dụng màu tối sang trọng (Dark Theme friendly).
+    """
+    # Nếu color là default blue, chuyển sang màu custom sang trọng hơn
+    if color == Color.blue():
+        color = Color.from_rgb(58, 134, 255) # Bright Blue Premium
+        
     embed = Embed(
         title=title, 
         description=desc, 
         color=color,
         timestamp=datetime.now(VN_TZ)
     )
+    
+    # Premium Footer
+    footer_text = footer if footer else "Thiên Lam Tông • Vạn Cổ Trường Tồn"
+    embed.set_footer(text=footer_text, icon_url="https://nrotxa.online/uploads/avatar/txa_admintxa_11-22-07%2029-Jan-26.jpg") # Placeholder icon, user can change
+    
+    if thumbnail:
+        embed.set_thumbnail(url=thumbnail)
+    
+    if image:
+        embed.set_image(url=image)
+        
     return embed
 
 def get_progress_bar(percent, length=12):

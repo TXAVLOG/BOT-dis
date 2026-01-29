@@ -434,7 +434,14 @@ class Music(commands.Cog):
             "quiet": True,
             "no_warnings": True,
             "extract_flat": True,
-            "default_search": "ytsearch"
+            "default_search": "ytsearch",
+            "nocheckcertificate": True,
+            "ignoreerrors": False,
+            "logtostderr": False,
+            "http_headers": {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+                "Referer": "https://www.youtube.com/",
+            }
         }
         
         loop = asyncio.get_running_loop()
@@ -483,7 +490,17 @@ class Music(commands.Cog):
             "outtmpl": path.replace(".mp3", ""),
             "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "192"}],
             "progress_hooks": [hook],
-            "quiet": True
+            "quiet": True,
+            "nocheckcertificate": True,
+            "ignoreerrors": False,
+            "logtostderr": False,
+            "no_warnings": True,
+            "default_search": "auto",
+            "source_address": "0.0.0.0",
+            "http_headers": {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+                "Referer": "https://www.youtube.com/",
+            }
         }
         
         # Background task để cập nhật tiến trình

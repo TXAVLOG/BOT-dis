@@ -30,3 +30,7 @@ dist/
 build/
 scripts/
 *.bak
+
+# Virtual Env
+venv/
+env/
