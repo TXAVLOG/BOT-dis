@@ -43,10 +43,6 @@ class SearchResultView(discord.ui.View):
         select = discord.ui.Select(placeholder="📜 Chọn tiên nhạc để khai mở...", options=options)
         select.callback = self.select_callback
         self.add_item(select)
-        
-        # Add Link Button for Top Result
-        if results:
-            self.add_item(discord.ui.Button(label="Xem trên YouTube", url=results[0]['url'], emoji="📺"))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user_id:
@@ -662,6 +658,7 @@ class Music(commands.Cog):
             res_embeds = [main_embed]
             for i, r in enumerate(results[:5]):
                  emb = txa_embed(f"{i+1}. {r['title']}", f"⏱️ {TXAFormat.time(r['duration'])}", Color.dark_grey())
+                 emb.url = r['url'] # Clickable title
                  if r.get('thumbnail'):
                      emb.set_thumbnail(url=r['thumbnail'])
                  res_embeds.append(emb)
