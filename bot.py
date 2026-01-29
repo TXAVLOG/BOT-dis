@@ -75,8 +75,15 @@ class TXATUTIen(commands.Bot):
         # Sync commands - Sync trực tiếp vào Guild để xuất hiện tức thì
         try:
             for guild_obj in self.allowed_guilds:
-                # Copy tất cả lệnh từ cogs sang guild
-                self.tree.copy_global_to(guild=guild_obj)
+                try:
+                    # Clear cũ để đảm bảo không bị cache rác
+                    self.tree.clear_commands(guild=guild_obj)
+                    
+                    # Copy tất cả lệnh từ cogs sang guild
+                    self.tree.copy_global_to(guild=guild_obj)
+                except Exception as e:
+                    rainbow_log(f"❌ Lỗi chuẩn bị đồng bộ tại {guild_obj.id}: {e}")
+                
                 # Sync
                 synced = await self.tree.sync(guild=guild_obj)
                 

@@ -7,12 +7,204 @@ import os
 import random
 import asyncio
 import time
+from typing import List
 from discord import app_commands, Embed, Color
 from discord.ext import commands, tasks
 from pytubefix import YouTube, Search
 from pytubefix.cli import on_progress
+from core.helpers import rainbow_log, txa_embed
+from core.format import TXAFormat
 
-# ... imports ...
+DOWNLOADS_DIR = "downloads"
+# Optimization for streaming
+FFMPEG_OPTIONS = {
+    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
+    'options': '-vn'
+}
+
+if not os.path.exists(DOWNLOADS_DIR):
+    os.makedirs(DOWNLOADS_DIR)
+
+class SearchResultView(discord.ui.View):
+    def __init__(self, cog, results, user_id):
+        super().__init__(timeout=60)
+        self.cog = cog
+        self.results = results
+        self.user_id = user_id
+        
+        # Create Select Menu
+        options = []
+        for i, res in enumerate(results[:25]): # Max 25 choices
+            options.append(discord.SelectOption(
+                label=f"{i+1}. {res['title'][:90]}",
+                description=f"Thời lượng: {TXAFormat.time(res['duration']) if res.get('duration') else 'N/A'}",
+                value=str(i)
+            ))
+            
+        select = discord.ui.Select(placeholder="📜 Chọn tiên nhạc để khai mở...", options=options)
+        select.callback = self.select_callback
+        self.add_item(select)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("⚠️ Đạo hữu không phải là người triệu hồi lệnh này!", ephemeral=True)
+            return False
+        return True
+
+    async def select_callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        select = self.children[0]
+        selected_index = int(select.values[0])
+        selected_item = self.results[selected_index]
+        
+        # Construct item for queue
+        item = {
+            "url": selected_item['url'],
+            "title": selected_item['title'],
+            "requester": interaction.user.id,
+            "channel_id": interaction.channel_id,
+            "duration": selected_item['duration']
+        }
+        
+        guild_id = interaction.guild_id
+        self.cog.queues.setdefault(guild_id, []).append(item)
+        
+        # Check if playing
+        vc = self.cog.voice_states.get(guild_id)
+        if vc and (vc.is_playing() or vc.is_paused()):
+            embed = txa_embed(
+                "➕ Tàng Kinh Các", 
+                f"Đã thêm vào hàng chờ:\n**{selected_item['title']}**", 
+                Color.blue()
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        else:
+            embed = txa_embed(
+                "⏳ Triệu Hồi Tiên Nhạc", 
+                f"Đang chuẩn bị thi triển: **{selected_item['title']}**", 
+                Color.gold()
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            await self.cog.play_next(guild_id, interaction.channel)
+
+class MusicControlView(discord.ui.View):
+    def __init__(self, cog, guild_id):
+        super().__init__(timeout=None)
+        self.cog = cog
+        self.guild_id = guild_id
+
+    @discord.ui.button(emoji="⏯️", style=discord.ButtonStyle.primary)
+    async def pause_resume(self, interaction: discord.Interaction, button: discord.ui.Button):
+        vc = self.cog.voice_states.get(self.guild_id)
+        if not vc: return
+        
+        if vc.is_paused():
+            vc.resume()
+            await interaction.response.send_message("▶️ Tiếp tục tiên nhạc!", ephemeral=True)
+        else:
+            vc.pause()
+            await interaction.response.send_message("⏸️ Đã ngưng đọng thời gian!", ephemeral=True)
+            
+    @discord.ui.button(emoji="⏭️", style=discord.ButtonStyle.secondary)
+    async def skip(self, interaction: discord.Interaction, button: discord.ui.Button):
+        vc = self.cog.voice_states.get(self.guild_id)
+        if vc:
+            vc.stop()
+            await interaction.response.send_message("⏭️ Đã bỏ qua chương nhạc này!", ephemeral=True)
+
+    @discord.ui.button(emoji="⏹️", style=discord.ButtonStyle.danger)
+    async def stop(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.cog.cleanup_music(self.guild_id)
+        await interaction.response.send_message("⏹️ Đã kết thúc buổi thuyết pháp.", ephemeral=True)
+
+class Music(commands.Cog):
+    def __init__(self, bot):
+        self.bot = bot
+        self.queues = {}
+        self.voice_states = {}
+        self.current_meta = {}
+        self.now_playing_msgs = {}
+        self.loops = {} # guild_id -> bool
+        self.transient_msgs = {} # guild_id -> [msg]
+        self.cache_manifest = {} # url -> path
+        self.progress_updater.start()
+
+    def cog_unload(self):
+        self.progress_updater.cancel()
+
+    async def check_access(self, interaction: discord.Interaction):
+        return True
+
+    async def reward_music_xp(self, user_id, xp):
+        # Placeholder
+        pass
+        
+    async def update_now_playing_display(self, guild_id, create_new=False):
+        meta = self.current_meta.get(guild_id)
+        if not meta: return
+
+        embed = txa_embed(
+            "🎵 Đang Tấu Khúc",
+            f"**[{meta['title']}]({meta['url']})**",
+            Color.purple()
+        )
+        if meta.get('thumb'):
+            embed.set_thumbnail(url=meta['thumb'])
+            
+        elapsed = int(time.time() - meta['start_time'] - meta['total_paused_time'])
+        total = meta.get('duration') or 0
+        progress = (elapsed / total * 100) if total > 0 else 0
+        bar = TXAFormat.progress_bar(min(100, progress), 15, "music")
+        
+        embed.add_field(
+            name="⏱️ Tiến Độ",
+            value=f"`{bar}`\n`{TXAFormat.time(elapsed)}` / `{TXAFormat.time(total)}`",
+            inline=False
+        )
+        embed.add_field(name="👤 Dẫn Khởi", value=f"<@{meta['requester']}>", inline=True)
+        
+        view = MusicControlView(self, guild_id)
+        
+        msg = self.now_playing_msgs.get(guild_id)
+        if msg:
+            try:
+                await msg.edit(embed=embed, view=view)
+                return
+            except:
+                pass # Message might be deleted
+        
+        if create_new:
+            try:
+                channel = self.bot.get_channel(meta['channel_id'])
+                if channel:
+                    msg = await channel.send(embed=embed, view=view)
+                    self.now_playing_msgs[guild_id] = msg
+            except:
+                pass
+
+    def add_transient(self, guild_id, msg):
+        if guild_id not in self.transient_msgs:
+            self.transient_msgs[guild_id] = []
+        self.transient_msgs[guild_id].append(msg)
+
+    async def cleanup_music(self, guild_id):
+        if guild_id in self.voice_states:
+            vc = self.voice_states[guild_id]
+            if vc.is_connected():
+                await vc.disconnect()
+            del self.voice_states[guild_id]
+        self.queues.pop(guild_id, None)
+        self.current_meta.pop(guild_id, None)
+        self.loops.pop(guild_id, None)
+        # Clear now playing msg
+        if guild_id in self.now_playing_msgs:
+            try: await self.now_playing_msgs[guild_id].delete()
+            except: pass
+            del self.now_playing_msgs[guild_id]
+
+    def cleanup_cache(self):
+        # Implement primitive cleanup: keep last 50 files or clear older than 24h
+        pass
 
     async def search_youtube(self, query: str, max_results: int = 5) -> List[dict]:
         """Tìm kiếm YouTube bằng pytubefix"""
@@ -212,7 +404,7 @@ from pytubefix.cli import on_progress
                 self.transient_msgs[guild_id] = kept_msgs
             
             # Khởi tạo Now Playing Message nếu chưa có
-            await self.update_now_playing_display(guild_id)
+            await self.update_now_playing_display(guild_id, create_new=True)
             
         except Exception as e:
             rainbow_log(f"❌ Lỗi phát nhạc: {e}")
