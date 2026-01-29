@@ -16,9 +16,8 @@ from core.helpers import rainbow_log, txa_embed
 from core.format import TXAFormat
 
 DOWNLOADS_DIR = "downloads"
-# Optimization for streaming
+# Optimization for playing local files (no stream options needed)
 FFMPEG_OPTIONS = {
-    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
     'options': '-vn'
 }
 
