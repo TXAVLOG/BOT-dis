@@ -5,12 +5,50 @@ import pytz
 import asyncio
 from datetime import datetime
 from colorama import Fore, Style
-from openai import OpenAI
 from discord import Embed, Color
 from dotenv import load_dotenv
 from core.format import TXAFormat
 
 load_dotenv()
+
+# --- AI PLATFORM DETECTION ---
+# Hỗ trợ: OpenAI, Gemini, cả hai, hoặc không dùng AI (fallback)
+_OPENAI_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+_GEMINI_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+
+_openai_client = None
+_gemini_client = None
+
+if _OPENAI_KEY:
+    try:
+        from openai import OpenAI
+        _openai_client = OpenAI(api_key=_OPENAI_KEY)
+    except Exception as _e:
+        print(f"[AI] ⚠️ OpenAI init failed: {_e}")
+
+if _GEMINI_KEY:
+    try:
+        # pyrefly: ignore [missing-import]
+        import google.generativeai as genai
+        genai.configure(api_key=_GEMINI_KEY)
+        _gemini_client = genai.GenerativeModel("gemini-2.0-flash")
+    except Exception as _e:
+        print(f"[AI] ⚠️ Gemini init failed: {_e}")
+
+_AI_PLATFORM = None
+if _openai_client and _gemini_client:
+    _AI_PLATFORM = "both"
+elif _openai_client:
+    _AI_PLATFORM = "openai"
+elif _gemini_client:
+    _AI_PLATFORM = "gemini"
+else:
+    _AI_PLATFORM = None
+
+if _AI_PLATFORM:
+    print(f"[AI] ✅ Nền tảng AI: {_AI_PLATFORM.upper()}")
+else:
+    print("[AI] ℹ️ Không có API Key AI — sử dụng cảnh giới mặc định (fallback)")
 
 # --- CONFIG ---
 VN_TZ = pytz.timezone('Asia/Ho_Chi_Minh')
@@ -46,28 +84,55 @@ def rainbow_log(msg, is_ascii=False, is_italic=False):
         print(f"{style}{colored}{RESET}")
 
 # --- AI HELPERS ---
-openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
 async def ask_ancestor(system_prompt, user_content, json_mode=False):
-    """Hỏi Tổ sư Từ Dương (AI)"""
-    try:
-        args = {
-            "model": "gpt-4o",
-            "messages": [
-                {"role": "system", "content": f"Bạn là Từ Dương, Tổ sư Thiên Lam Tông. {system_prompt}"},
-                {"role": "user", "content": user_content}
-            ],
-            "timeout": 15
-        }
-        if json_mode:
-            args["response_format"] = {"type": "json_object"}
-        
-        loop = asyncio.get_running_loop()
-        response = await loop.run_in_executor(None, lambda: openai_client.chat.completions.create(**args))
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        rainbow_log(f"⚠️ Thiên Đạo chấn động (AI Error): {e}")
+    """Hỏi Tổ sư Từ Dương (AI) — hỗ trợ OpenAI, Gemini, hoặc fallback None"""
+    if _AI_PLATFORM is None:
         return None
+
+    system_full = f"Bạn là Từ Dương, Tổ sư Thiên Lam Tông. {system_prompt}"
+
+    # --- Thử OpenAI trước nếu có ---
+    if _openai_client:
+        try:
+            args = {
+                "model": "gpt-4o",
+                "messages": [
+                    {"role": "system", "content": system_full},
+                    {"role": "user", "content": user_content}
+                ],
+                "timeout": 15
+            }
+            if json_mode:
+                args["response_format"] = {"type": "json_object"}
+            loop = asyncio.get_running_loop()
+            response = await loop.run_in_executor(
+                None, lambda: _openai_client.chat.completions.create(**args)
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            rainbow_log(f"⚠️ OpenAI Error: {e}" + (". Thử Gemini..." if _gemini_client else ""))
+
+    # --- Fallback sang Gemini nếu có ---
+    if _gemini_client:
+        try:
+            prompt = f"{system_full}\n\nNgười dùng: {user_content}"
+            if json_mode:
+                prompt += "\n\nTRẢ VỀ JSON HỢP LỆ DUY NHẤT, không có markdown hay text thừa."
+            loop = asyncio.get_running_loop()
+            response = await loop.run_in_executor(
+                None, lambda: _gemini_client.generate_content(prompt)
+            )
+            text = response.text.strip()
+            # Xóa markdown code block nếu có
+            if text.startswith("```"):
+                text = text.split("```")[1]
+                if text.startswith("json"):
+                    text = text[4:]
+            return text.strip()
+        except Exception as e:
+            rainbow_log(f"⚠️ Gemini Error: {e}")
+
+    return None
 
 # --- EMOJI CACHE ---
 def load_emoji_cache():

@@ -5,10 +5,13 @@ discord.py[voice]   # Discord API + voice support
 PyNaCl              # Required for voice
 aiosqlite           # Async SQLite database
 
-openai              # AI generate cultivation ranks
+# --- AI (chọn 1 hoặc cả 2, hoặc không cần) ---
+openai                      # OpenAI GPT (OPENAI_API_KEY)
+google-generativeai         # Google Gemini  (GEMINI_API_KEY)
+
 python-dotenv       # Load .env config
 colorama            # Colored terminal logs
 pytz                # Timezone support
 aiohttp             # Async HTTP requests
 requests            # Sync HTTP requests
-pytubefix           # YouTube search & download (music cog)
+pytubefix           # YouTube search & download (music cog)
