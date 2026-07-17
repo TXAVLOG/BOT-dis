@@ -1,11 +1,14 @@
-discord.py[voice]
-openai
-python-dotenv
-colorama
-pytz
-aiohttp
-pytubefix
-PyNaCl
-gTTS
-aiosqlite
-requests
+# Bot Tu Tiên - Thiên Lam Tông
+# Discord bot requirements
+
+discord.py[voice]   # Discord API + voice support
+PyNaCl              # Required for voice
+aiosqlite           # Async SQLite database
+
+openai              # AI generate cultivation ranks
+python-dotenv       # Load .env config
+colorama            # Colored terminal logs
+pytz                # Timezone support
+aiohttp             # Async HTTP requests
+requests            # Sync HTTP requests
+pytubefix           # YouTube search & download (music cog)
